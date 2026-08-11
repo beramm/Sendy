@@ -1,11 +1,18 @@
 import SwiftUI
 
-/// Position on the climb, expressed as **move N of M plus an offset within the
-/// move**. There is no shared clock — one climber may take 4s through a move
-/// and the other 11s — so there is no time-indexed scrubber to reconcile later.
+/// Position on the climb, expressed as **sequence N of M plus an offset within
+/// the sequence**.
+///
+/// Indexed by sequence, not by move and not by time. There is no shared clock —
+/// one climber may take 7s through a stretch and the other 1s — and a move
+/// index is no better, because the two climbers can take a different number of
+/// moves across the same span. "Move 6" then names two different places at
+/// once. A sequence is bounded by holds both of them actually took, so it names
+/// one position in a locked pair by construction.
 struct MovePosition: Equatable {
+    /// Index into `ProcessedSession.sequences.sequences`.
     var sectionIndex: Int = 0
-    /// 0...1 within the move.
+    /// 0...1 within the sequence.
     var offset: Double = 0
 }
 
@@ -68,7 +75,7 @@ struct ResultsView: View {
             }
 
             HStack {
-                NavigationLink("Moves") { SectionListView(jumpTo: jump) }
+                NavigationLink("Moves") { SectionListView(jumpTo: { jump(processed, toMove: $0) }) }
                 NavigationLink("Raw metrics") { RawMetricsView() }
                 NavigationLink("Route") { RouteCorrectionView() }
                 NavigationLink("Tuning") { TuningPanelView() }
@@ -129,8 +136,8 @@ struct ResultsView: View {
                     video: processed.attempt,
                     pose: processed.attemptPose,
                     frameIndex: frames.attempt,
-                    unavailableReason: processed.sections.indices.contains(position.sectionIndex)
-                        ? (processed.sections[position.sectionIndex].unavailableReason ?? "not reached")
+                    unavailableReason: currentSequence(processed)?.attemptReached == false
+                        ? "no footage for this sequence"
                         : "not reached"
                 )
             }
@@ -146,19 +153,27 @@ struct ResultsView: View {
     /// Reference frame from the scrub position, attempt frame from the DTW
     /// path. Same *move*, never same timestamp.
     private func resolvedFrames(_ processed: ProcessedSession) -> (reference: Int, attempt: Int?) {
-        guard processed.sections.indices.contains(position.sectionIndex) else { return (0, nil) }
-        let section = processed.sections[position.sectionIndex]
-        let referenceFrame = frame(in: section.referenceRange, offset: position.offset)
+        let sequences = processed.sequences.sequences
+        guard sequences.indices.contains(position.sectionIndex) else { return (0, nil) }
+        let sequence = sequences[position.sectionIndex]
+        let referenceFrame = frame(in: sequence.referenceRange, offset: position.offset)
 
         if syncLocked {
-            let attempt = processed.warpPath(forSection: section.index)?.attemptFrame(forReference: referenceFrame)
-            return (referenceFrame, attempt)
+            let path = processed.sequenceWarpPaths.first { $0.sectionIndex == sequence.index }
+            return (referenceFrame, path?.attemptFrame(forReference: referenceFrame))
         }
         // Unlocked: the attempt pane scrubs on its own clock. The escape hatch
-        // exists because DTW will sometimes misalign a move, and locked mode
-        // makes that failure impossible to inspect.
-        guard section.attemptReached else { return (referenceFrame, nil) }
-        return (referenceFrame, frame(in: section.attemptRange, offset: attemptOffsetOverride ?? position.offset))
+        // exists because DTW will sometimes misalign a sequence, and locked
+        // mode makes that failure impossible to inspect.
+        guard sequence.attemptReached else { return (referenceFrame, nil) }
+        return (referenceFrame, frame(in: sequence.attemptRange, offset: attemptOffsetOverride ?? position.offset))
+    }
+
+    /// The sequence the scrubber is currently on.
+    private func currentSequence(_ processed: ProcessedSession) -> ClimbSequence? {
+        let sequences = processed.sequences.sequences
+        guard sequences.indices.contains(position.sectionIndex) else { return nil }
+        return sequences[position.sectionIndex]
     }
 
     private func frame(in range: Range<Int>, offset: Double) -> Int {
@@ -173,21 +188,28 @@ struct ResultsView: View {
     private func currentAnalysis(_ processed: ProcessedSession) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
+                let moveIndices = currentSequence(processed).map { Array($0.referenceMoves) } ?? []
                 if let fall = processed.fallAnalysis,
-                   fall.sectionIndex == position.sectionIndex || processed.fallReport.distalSectionIndex == position.sectionIndex {
+                   moveIndices.contains(fall.sectionIndex) || moveIndices.contains(processed.fallReport.distalSectionIndex ?? -1) {
                     Text(fall.headline).font(.headline).foregroundStyle(.red)
                     ForEach(fall.observations) { AnalysisNoteRow(note: $0) }
                     Button("Show me why") { drillIntoFall(processed) }
                         .font(.caption)
                 }
-                if let analysis = processed.analysis(forSection: position.sectionIndex) {
-                    Text(analysis.headline).font(.headline)
-                    ForEach(analysis.observations) { AnalysisNoteRow(note: $0) }
-                    if let drill = analysis.drill {
-                        Text("Try: \(drill)").font(.callout).foregroundStyle(.secondary)
-                    }
-                    ForEach(analysis.warnings, id: \.self) {
-                        Text($0).font(.caption2).foregroundStyle(.orange)
+                // A sequence can hold more than one of the reference's moves,
+                // so it shows all of their analyses rather than picking one.
+                // Metrics are still measured per move; only the comparison and
+                // the scrubbing happen per sequence.
+                ForEach(moveIndices, id: \.self) { index in
+                    if let analysis = processed.analysis(forSection: index) {
+                        Text(analysis.headline).font(.headline)
+                        ForEach(analysis.observations) { AnalysisNoteRow(note: $0) }
+                        if let drill = analysis.drill {
+                            Text("Try: \(drill)").font(.callout).foregroundStyle(.secondary)
+                        }
+                        ForEach(analysis.warnings, id: \.self) {
+                            Text($0).font(.caption2).foregroundStyle(.orange)
+                        }
                     }
                 }
             }
@@ -221,8 +243,16 @@ struct ResultsView: View {
         }
     }
 
-    private func jump(to sectionIndex: Int) {
-        position = MovePosition(sectionIndex: sectionIndex, offset: 0)
+    /// Jump to the sequence containing a given reference **move**.
+    ///
+    /// Callers hold move indices — the fall report names a move, and the
+    /// section list is per move — while the scrubber is indexed by sequence, so
+    /// the translation lives here rather than at each call site.
+    private func jump(_ processed: ProcessedSession, toMove moveIndex: Int) {
+        let sequences = processed.sequences.sequences
+        let target = sequences.firstIndex { $0.referenceMoves.contains(moveIndex) }
+            ?? min(moveIndex, max(0, sequences.count - 1))
+        position = MovePosition(sectionIndex: target, offset: 0)
     }
 
     /// Task 5.5 — tapping a fall finding lands on the frame where the COM
@@ -236,18 +266,21 @@ struct ResultsView: View {
               let frameIndex = signal.frameIndex,
               let section = processed.sections.first(where: { $0.attemptRange.contains(frameIndex) })
         else {
-            if let index = processed.fallReport.fallSectionIndex { jump(to: index) }
+            if let index = processed.fallReport.fallSectionIndex { jump(processed, toMove: index) }
             return
         }
         // The frame is an attempt frame; walk the DTW path back to a reference
         // frame so the scrubber lands on the same move.
-        let offset: Double
-        if section.attemptRange.count > 1 {
-            offset = Double(frameIndex - section.attemptRange.lowerBound) / Double(section.attemptRange.count - 1)
-        } else {
-            offset = 0
+        let sequences = processed.sequences.sequences
+        guard let sequenceIndex = sequences.firstIndex(where: { $0.referenceMoves.contains(section.index) }) else {
+            jump(processed, toMove: section.index)
+            return
         }
-        position = MovePosition(sectionIndex: section.index, offset: offset)
+        let span = sequences[sequenceIndex].attemptRange
+        let offset = span.count > 1
+            ? Double(frameIndex - span.lowerBound) / Double(span.count - 1)
+            : 0
+        position = MovePosition(sectionIndex: sequenceIndex, offset: offset.clamped(to: 0 ... 1))
     }
 }
 
@@ -305,36 +338,42 @@ struct MoveScrubber: View {
 
                 Button {
                     position = MovePosition(
-                        sectionIndex: min(processed.sections.count - 1, position.sectionIndex + 1),
+                        sectionIndex: min(processed.sequences.sequences.count - 1, position.sectionIndex + 1),
                         offset: 0
                     )
                 } label: { Image(systemName: "chevron.right") }
-                .disabled(position.sectionIndex >= processed.sections.count - 1)
+                .disabled(position.sectionIndex >= processed.sequences.sequences.count - 1)
             }
 
             Slider(value: $position.offset, in: 0 ... 1)
 
-            // Section markers and the fall marker fall out of move indexing
-            // naturally.
+            // One marker per sequence, widthed by how many reference moves it
+            // holds, so a sequence covering two moves is visibly wider than one
+            // covering a single move.
             HStack(spacing: 2) {
-                ForEach(processed.sections) { section in
+                ForEach(processed.sequences.sequences) { sequence in
                     Rectangle()
-                        .fill(colour(for: section))
+                        .fill(colour(for: sequence))
                         .frame(height: 10)
+                        .frame(maxWidth: .infinity)
+                        .layoutPriority(Double(max(1, sequence.referenceMoves.count)))
                         .overlay {
-                            if processed.fallReport.fallSectionIndex == section.index {
+                            if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) {
                                 Text("F").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
-                            } else if processed.fallReport.distalSectionIndex == section.index {
-                                Text("·").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                            } else if sequence.moveCountDelta != 0 {
+                                // The headline structural difference, visible
+                                // without reading any text.
+                                Text("\(sequence.attemptMoves.count)v\(sequence.referenceMoves.count)")
+                                    .font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
                             }
                         }
                         .onTapGesture {
-                            position = MovePosition(sectionIndex: section.index, offset: 0)
+                            position = MovePosition(sectionIndex: sequence.index, offset: 0)
                         }
                 }
             }
 
-            Toggle("Sync locked to the reference climber's move", isOn: $syncLocked)
+            Toggle("Sync locked to the reference climber's sequence", isOn: $syncLocked)
                 .font(.caption)
                 .onChange(of: syncLocked) { _, locked in
                     attemptOffsetOverride = locked ? nil : position.offset
@@ -351,23 +390,38 @@ struct MoveScrubber: View {
     }
 
     private var label: String {
-        guard processed.sections.indices.contains(position.sectionIndex) else { return "no moves" }
-        let section = processed.sections[position.sectionIndex]
-        var text = "Move \(position.sectionIndex + 1) of \(processed.sections.count)  \(Int(position.offset * 100))%"
-        if let reason = section.unavailableReason { text += "  (\(reason))" }
-        switch section.divergence?.kind {
-        case .truncated: text += "  (came off here)"
-        case .some: text += "  (different sequence)"
-        case .none: break
+        let sequences = processed.sequences.sequences
+        guard sequences.indices.contains(position.sectionIndex) else { return "no sequences" }
+        let sequence = sequences[position.sectionIndex]
+        var text = "Sequence \(position.sectionIndex + 1) of \(sequences.count)  \(Int(position.offset * 100))%"
+        // Move counts per climber, which is the finding this layer exists to
+        // surface: three moves against one is not a mismatch, it is the
+        // difference worth reporting.
+        let refMoves = sequence.referenceMoves.count
+        let attMoves = sequence.attemptMoves.count
+        if refMoves != attMoves { text += "  (\(refMoves) move\(refMoves == 1 ? "" : "s") vs your \(attMoves))" }
+        if !sequence.attemptReached { text += "  (no attempt footage)" }
+        // Truncation is a claim about the climber coming off, so it is read
+        // from the moves inside this sequence rather than assumed from the
+        // sequence itself.
+        if moves(of: sequence).contains(where: { $0.divergence?.kind == .truncated }) {
+            text += "  (came off here)"
         }
         return text
     }
 
-    private func colour(for section: Section) -> Color {
-        if processed.fallReport.fallSectionIndex == section.index { return .red }
-        if section.divergence != nil { return .orange }
-        if !section.attemptReached { return .gray }
-        return section.index == position.sectionIndex ? .blue : .blue.opacity(0.35)
+    /// The reference's own moves inside a sequence.
+    private func moves(of sequence: ClimbSequence) -> [Section] {
+        sequence.referenceMoves
+            .filter { processed.sections.indices.contains($0) }
+            .map { processed.sections[$0] }
+    }
+
+    private func colour(for sequence: ClimbSequence) -> Color {
+        if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) { return .red }
+        if sequence.moveCountDelta != 0 { return .orange }
+        if !sequence.attemptReached { return .gray }
+        return sequence.index == position.sectionIndex ? .blue : .blue.opacity(0.35)
     }
 }
 

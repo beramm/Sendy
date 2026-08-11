@@ -180,13 +180,41 @@ public struct TimeAligner: Sendable {
         referenceContacts: [Set<JointName>],
         attemptContacts: [Set<JointName>]
     ) -> WarpPath {
-        guard !section.referenceRange.isEmpty, !section.attemptRange.isEmpty else {
-            return WarpPath(sectionIndex: section.index, pairs: [], meanCost: .infinity)
+        align(
+            index: section.index,
+            referenceRange: section.referenceRange, attemptRange: section.attemptRange,
+            reference: reference, attempt: attempt,
+            referenceScale: referenceScale, attemptScale: attemptScale,
+            referenceContacts: referenceContacts, attemptContacts: attemptContacts
+        )
+    }
+
+    /// Warp one span of each climb onto the other.
+    ///
+    /// Takes ranges rather than a `Section` so the same code can anchor at
+    /// **sequence** boundaries, which is the only place the two climbs are
+    /// provably in the same position. Anchoring at moves assumes attempt move
+    /// *n* means the same as reference move *n*, and where it does not, DTW has
+    /// no way to spread the mismatch: it absorbs the whole unmatched stretch at
+    /// one point in the path, which is what a climber sees as teleporting.
+    public func align(
+        index: Int,
+        referenceRange: Range<Int>,
+        attemptRange: Range<Int>,
+        reference: PoseSequence,
+        attempt: PoseSequence,
+        referenceScale: ClimbScale,
+        attemptScale: ClimbScale,
+        referenceContacts: [Set<JointName>],
+        attemptContacts: [Set<JointName>]
+    ) -> WarpPath {
+        guard !referenceRange.isEmpty, !attemptRange.isEmpty else {
+            return WarpPath(sectionIndex: index, pairs: [], meanCost: .infinity)
         }
-        let refIndices = Array(section.referenceRange).filter { $0 < reference.count }
-        let attIndices = Array(section.attemptRange).filter { $0 < attempt.count }
+        let refIndices = Array(referenceRange).filter { $0 < reference.count }
+        let attIndices = Array(attemptRange).filter { $0 < attempt.count }
         guard !refIndices.isEmpty, !attIndices.isEmpty else {
-            return WarpPath(sectionIndex: section.index, pairs: [], meanCost: .infinity)
+            return WarpPath(sectionIndex: index, pairs: [], meanCost: .infinity)
         }
 
         let refFeatures = refIndices.map {
@@ -200,6 +228,6 @@ public struct TimeAligner: Sendable {
         let pairs = rawPath.map {
             WarpPair(referenceFrame: refIndices[$0.referenceFrame], attemptFrame: attIndices[$0.attemptFrame])
         }
-        return WarpPath(sectionIndex: section.index, pairs: pairs, meanCost: meanCost)
+        return WarpPath(sectionIndex: index, pairs: pairs, meanCost: meanCost)
     }
 }

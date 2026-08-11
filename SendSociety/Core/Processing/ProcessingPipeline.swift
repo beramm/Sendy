@@ -54,6 +54,10 @@ public struct ProcessedSession: Sendable {
     /// suppress.
     public var sequences: SequenceResult
     public var warpPaths: [WarpPath]
+    /// Warping paths anchored at **sequence** boundaries — what locked
+    /// playback uses. `warpPaths` above is move-anchored and is what per-move
+    /// metrics align against.
+    public var sequenceWarpPaths: [WarpPath]
     public var referenceMetrics: ClimbMetrics
     public var attemptMetrics: ClimbMetrics
     public var referenceSectionMetrics: [SectionMetrics]
@@ -308,6 +312,29 @@ public actor ProcessingPipeline {
             ))
             try checkCancelled()
         }
+        // **Playback anchors at sequences, not at moves.**
+        //
+        // A move-anchored path pins attempt move n to reference move n, which
+        // is only valid when the two climbers made the same moves. Where they
+        // did not, DTW cannot spread the mismatch and dumps it at one point in
+        // the path — seen as the climber teleporting mid-scrub. Sequence
+        // boundaries are the only frames where both are provably in the same
+        // place, and inside one DTW is free to map three moves onto one.
+        //
+        // The move-level paths above stay: metrics are measured per move, and
+        // that is what they align.
+        var sequenceWarpPaths: [WarpPath] = []
+        for sequence in sequenceResult.sequences {
+            sequenceWarpPaths.append(aligner.align(
+                index: sequence.index,
+                referenceRange: sequence.referenceRange, attemptRange: sequence.attemptRange,
+                reference: referencePose, attempt: attemptPose,
+                referenceScale: referenceScale, attemptScale: attemptScale,
+                referenceContacts: referenceContactStates, attemptContacts: attemptContactStates
+            ))
+            try checkCancelled()
+        }
+
         let unaligned = warpPaths.filter(\.isEmpty).count
         report(
             "Time alignment", t,
@@ -413,6 +440,7 @@ public actor ProcessingPipeline {
             sections: sections,
             sequences: sequenceResult,
             warpPaths: warpPaths,
+            sequenceWarpPaths: sequenceWarpPaths,
             referenceMetrics: referenceMetrics,
             attemptMetrics: attemptMetrics,
             referenceSectionMetrics: referenceSectionMetrics,
