@@ -17,4 +17,6 @@ gym-testing/
 
 # Project documentation and notes — kept local, not published.
 *.md
-!README.md
+# Root README only. A bare `!README.md` would also un-ignore Fixtures/README.md,
+# which documents footage that is deliberately not published.
+!/README.md
