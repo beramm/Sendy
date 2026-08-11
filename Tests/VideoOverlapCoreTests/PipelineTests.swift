@@ -284,6 +284,42 @@ struct ContactRouteTests {
         }
     }
 
+    @Test("A skipped move's span ends at the attempt's next hold, not a distant one")
+    func skippedMoveSpanIsNarrow() {
+        let (route, scale, config) = ladderRoute()
+        func hand(_ j: JointName, _ s: Int, _ e: Int, _ h: Int) -> Contact {
+            Contact(joint: j, startFrame: s, endFrame: e, position: route.holds[h].position, confidence: 0.9)
+        }
+        let reference = RouteMatcher().match(
+            contacts: [
+                hand(.leftWrist, 0, 20, 0), hand(.rightWrist, 30, 50, 1),
+                hand(.leftWrist, 60, 80, 2), hand(.rightWrist, 90, 110, 3)
+            ],
+            to: route, scale: scale, config: config
+        )
+        // The attempt takes hold 1 *before* hold 0 — out of the reference's
+        // order — then carries on to 2 and 3 much later. Move 1 (0 → 1) cannot
+        // find a forward span, and must not swallow everything up to hold 3.
+        let attempt = RouteMatcher().match(
+            contacts: [
+                hand(.rightWrist, 0, 20, 1),
+                hand(.leftWrist, 40, 60, 0),
+                hand(.leftWrist, 80, 100, 2),
+                hand(.rightWrist, 300, 340, 3)
+            ],
+            to: route, scale: scale, config: config
+        )
+        let result = SectionSegmenter().segment(
+            route: route, reference: reference, attempt: attempt,
+            referenceFrameCount: 120, attemptFrameCount: 400
+        )
+        let move = result.sections[0]
+        #expect(move.divergence?.kind == .skippedHold)
+        // Ends at the attempt's next acquisition (frame 80), not at hold 3's
+        // arrival (frame 300) and not at the end of the clip.
+        #expect(move.attemptRange == 40 ..< 80)
+    }
+
     @Test("A genuinely truncated attempt marks exactly one move")
     func truncationMarksOneMove() {
         let (route, scale, config) = ladderRoute()

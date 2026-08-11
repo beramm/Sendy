@@ -94,14 +94,29 @@ public struct SectionSegmenter: Sendable {
                 // attempt's overall progress separates them.
                 if lastReachedRefIndex > i {
                     // It got past this move without using the target hold —
-                    // a skipped hold, not the end of the go. The span runs to
-                    // whichever later hold it actually reached.
+                    // a skipped hold, not the end of the go.
+                    //
+                    // The span ends at the attempt's **own next hand
+                    // acquisition**, not at the next hold the reference happens
+                    // to visit later. Searching forward through the reference's
+                    // order can land many holds away when the attempt took the
+                    // route out of order, and the span then covers several
+                    // reference moves' worth of climbing. Locked side-by-side
+                    // playback maps that long attempt span onto one short
+                    // reference move, so the attempt pane races through it —
+                    // observed on `gym-testing/test1` move 5 as the climber
+                    // appearing to teleport.
+                    //
+                    // This narrows it but does not make it right. The attempt
+                    // genuinely covered more wall than the reference did
+                    // between these two holds, and a move-to-move mapping has
+                    // nowhere to put that. The fix is the sequence layer, where
+                    // the two holds either side are anchors and the span is
+                    // allowed to hold a different number of moves per climber.
                     var aEnd = attemptEnd
-                    for j in (i + 1) ..< refAcquisitions.count {
-                        if let f = attemptArrival[refAcquisitions[j].holdID], f > aStart {
-                            aEnd = f
-                            break
-                        }
+                    for a in attemptAcquisitions where a.frame > aStart {
+                        aEnd = a.frame
+                        break
                     }
                     attemptRange = aStart ..< max(min(aEnd, attemptEnd), aStart + 1)
                     divergence = BetaDivergence(
