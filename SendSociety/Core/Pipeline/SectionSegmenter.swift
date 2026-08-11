@@ -21,7 +21,9 @@ public struct SectionSegmenter: Sendable {
         reference: MatchResult,
         attempt: MatchResult,
         referenceFrameCount: Int,
-        attemptFrameCount: Int
+        attemptFrameCount: Int,
+        scale: ClimbScale? = nil,
+        config: TuningConfig = TuningConfig()
     ) -> SegmentationResult {
         // The climb ends at the last contact, not at the end of the file.
         // Clips have two seconds of head and tail by protocol, and letting a
@@ -32,7 +34,41 @@ public struct SectionSegmenter: Sendable {
             (attempt.matched.map(\.contact.endFrame).max()).map { $0 + 1 } ?? attemptFrameCount
         )
         var warnings: [String] = []
-        let refAcquisitions = reference.handAcquisitions
+        var refAcquisitions = reference.handAcquisitions
+
+        // **A boulder ends at the top hold.**
+        //
+        // Hands that go somewhere lower afterwards are the climber coming down,
+        // reaching past, or letting go — not a move on the route. Keeping them
+        // invents moves the attempt can never reach, which then report as the
+        // end of the attempt's go.
+        //
+        // Only trailing acquisitions are dropped, and only those clearly below
+        // the high point, so a finishing match at roughly the same height
+        // survives. Disabled by raising `topOutDropMargin`, which is what a
+        // traverse or a genuinely low finish needs.
+        if let scale, refAcquisitions.count >= 2 {
+            let heights = refAcquisitions.map { route.hold(id: $0.holdID)?.position.y ?? 0 }
+            if let peak = heights.max(), let topIndex = heights.firstIndex(of: peak) {
+                let margin = config.topOutDropMargin * scale.torsoLength
+                var cut = refAcquisitions.count
+                while cut - 1 > topIndex, heights[cut - 1] < peak - margin {
+                    cut -= 1
+                }
+                if cut < refAcquisitions.count {
+                    let dropped = refAcquisitions.count - cut
+                    let topHold = refAcquisitions[topIndex].holdID + 1
+                    refAcquisitions = Array(refAcquisitions.prefix(cut))
+                    warnings.append(
+                        dropped == 1
+                        ? "1 hand hold used after topping out on hold \(topHold) was left out of the moves. "
+                          + "Raise the top-out drop margin if this route finishes low."
+                        : "\(dropped) hand holds used after topping out on hold \(topHold) were left out of the moves. "
+                          + "Raise the top-out drop margin if this route finishes low."
+                    )
+                }
+            }
+        }
 
         guard refAcquisitions.count >= 2 else {
             return SegmentationResult(
@@ -79,15 +115,25 @@ public struct SectionSegmenter: Sendable {
 
             if let aStart = attemptArrival[from.holdID], let aEnd = attemptArrival[to.holdID], aEnd > aStart {
                 attemptRange = aStart ..< min(aEnd, max(attemptEnd, aStart + 1))
-            } else if attemptArrival[to.holdID] != nil && attemptArrival[from.holdID] == nil {
+            } else if let aEnd = attemptArrival[to.holdID], attemptArrival[from.holdID] == nil {
                 // Reached the target without ever using the source hold.
                 divergence = BetaDivergence(
                     kind: .skippedHold,
                     detail: "You reached this hold without using hold \(from.holdID + 1) that the reference climber used.",
                     positions: [fromHold.position]
                 )
-                let aEnd = attemptArrival[to.holdID]!
-                attemptRange = max(0, aEnd - 1) ..< aEnd
+                // Span the attempt's **approach** to the target, from whatever
+                // it was holding beforehand.
+                //
+                // This used to be `aEnd - 1 ..< aEnd` — a single frame — which
+                // left the attempt pane unable to move at all while the
+                // reference pane played a whole move. Observed on
+                // `gym-testing/test1` move 9 as a completely frozen attempt
+                // video. A one-frame span is not a small span, it is an absent
+                // one, and it reads as a broken player rather than as a
+                // reported beta difference.
+                let aStart = attemptAcquisitions.last { $0.frame < aEnd }?.frame ?? 0
+                attemptRange = aStart ..< max(min(aEnd, attemptEnd), aStart + 1)
             } else if let aStart = attemptArrival[from.holdID] {
                 // Reached the source hold but not the target. Two very
                 // different things look identical at this point, and only the

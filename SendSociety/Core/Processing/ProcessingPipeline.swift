@@ -256,7 +256,9 @@ public actor ProcessingPipeline {
             reference: referenceMatch,
             attempt: attemptMatch,
             referenceFrameCount: referencePose.count,
-            attemptFrameCount: attemptPose.count
+            attemptFrameCount: attemptPose.count,
+            scale: referenceScale,
+            config: config
         )
         let sections = segmentation.sections
         report(

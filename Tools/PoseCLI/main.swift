@@ -231,7 +231,8 @@ func commandSegment(_ args: [String]) throws {
     let match = RouteMatcher().match(contacts: result.contacts, to: route, scale: scale, config: config)
     let segmentation = SectionSegmenter().segment(
         route: route, reference: match, attempt: match,
-        referenceFrameCount: smoothed.count, attemptFrameCount: smoothed.count
+        referenceFrameCount: smoothed.count, attemptFrameCount: smoothed.count,
+        scale: scale, config: config
     )
 
     print(String(format: "torso %.4f wall units · %d frames @ %.0ffps", scale.torsoLength, smoothed.count, smoothed.frameRate))

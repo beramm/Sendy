@@ -117,6 +117,21 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// is an off-route hold.
     public var routeMatchRadius: Double = 0.80
 
+    /// How far **below** the highest hand hold a later hand acquisition has to
+    /// sit, in body-lengths, before the climb is treated as already topped out.
+    ///
+    /// A boulder finishes on the top hold. Hands that go somewhere lower
+    /// afterwards are the climber coming down, reaching past, or letting go —
+    /// not a move on the route. On `gym-testing/test1` the reference tops out
+    /// on hold 18 at frame 1139 and then touches hold 19, three quarters of a
+    /// body-length lower, at frame 1446. That produced a twelfth "move" after
+    /// the send, which the attempt could never reach and which therefore
+    /// reported as the end of their go.
+    ///
+    /// Set to a large value to disable, which is what a traverse or a route
+    /// with a genuinely low finish needs.
+    public var topOutDropMargin: Double = 0.50
+
     // MARK: Depth (foreshortening)
 
     /// Percentile of observed segment length taken as `L_true`.
@@ -254,6 +269,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Route", label: "Min plausible holds", help: "Below this, warn", kind: .int(\.minPlausibleHolds, range: 1 ... 10)),
         .init(group: "Route", label: "Max plausible holds", help: "Above this, warn", kind: .int(\.maxPlausibleHolds, range: 5 ... 60)),
         .init(group: "Route", label: "Attempt match radius (BL)", help: "Beyond this an attempt contact is off-route", kind: .double(\.routeMatchRadius, range: 0.05 ... 3, step: 0.05)),
+        .init(group: "Route", label: "Top-out drop margin (BL)", help: "Hands going this far below the top hold end the climb; raise to disable", kind: .double(\.topOutDropMargin, range: 0.1 ... 10, step: 0.1)),
 
         .init(group: "Depth", label: "Segment length percentile", help: "Percentile taken as true limb length", kind: .double(\.segmentLengthPercentile, range: 0.5 ... 1, step: 0.01)),
         .init(group: "Depth", label: "Confidence floor", help: "z suppressed below this", kind: .double(\.depthConfidenceFloor, range: 0 ... 1, step: 0.01)),

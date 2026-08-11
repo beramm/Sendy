@@ -320,6 +320,81 @@ struct ContactRouteTests {
         #expect(move.attemptRange == 40 ..< 80)
     }
 
+    @Test("Hands used after topping out don't become moves")
+    func topOutEndsTheClimb() {
+        // Four holds climbing, then a fifth well below the top — the climber
+        // coming down or reaching past after the send.
+        let positions = [0.20, 0.40, 0.60, 0.85, 0.55]
+        let holds = positions.enumerated().map { i, y in
+            Hold(id: i, position: Point2D(x: 0.45, y: y), firstUsedBy: .leftWrist,
+                 ordinal: i, contactCount: 1, firstFrame: i * 30)
+        }
+        let route = Route(holds: holds)
+        var config = TuningConfig()
+        config.routeMatchRadius = 0.5
+        let scale = ClimbScale(iso: .square, torsoLength: 0.1)
+        let contacts = holds.enumerated().map { i, h in
+            Contact(joint: i.isMultiple(of: 2) ? .leftWrist : .rightWrist,
+                    startFrame: i * 30, endFrame: i * 30 + 20, position: h.position, confidence: 0.9)
+        }
+        let match = RouteMatcher().match(contacts: contacts, to: route, scale: scale, config: config)
+        let result = SectionSegmenter().segment(
+            route: route, reference: match, attempt: match,
+            referenceFrameCount: 200, attemptFrameCount: 200,
+            scale: scale, config: config
+        )
+        // Five acquisitions would be four moves; the post-top one is dropped.
+        #expect(result.sections.count == 3)
+        #expect(result.sections.last?.toHold.id == 3)
+        #expect(result.warnings.contains { $0.contains("topping out") })
+
+        // Raising the margin disables it — a traverse or a low finish needs that.
+        var permissive = config
+        permissive.topOutDropMargin = 10
+        let untrimmed = SectionSegmenter().segment(
+            route: route, reference: match, attempt: match,
+            referenceFrameCount: 200, attemptFrameCount: 200,
+            scale: scale, config: permissive
+        )
+        #expect(untrimmed.sections.count == 4)
+    }
+
+    @Test("No reached move gets a one-frame attempt span")
+    func noFrozenAttemptPane() {
+        let (route, scale, config) = ladderRoute()
+        func hand(_ j: JointName, _ s: Int, _ e: Int, _ h: Int) -> Contact {
+            Contact(joint: j, startFrame: s, endFrame: e, position: route.holds[h].position, confidence: 0.9)
+        }
+        let reference = RouteMatcher().match(
+            contacts: [
+                hand(.leftWrist, 0, 20, 0), hand(.rightWrist, 30, 50, 1),
+                hand(.leftWrist, 60, 80, 2), hand(.rightWrist, 90, 110, 3)
+            ],
+            to: route, scale: scale, config: config
+        )
+        // The attempt skips hold 1 — it goes 0, then straight to 2. Move 2
+        // (1 → 2) therefore has a target the attempt reached and a source it
+        // never used.
+        let attempt = RouteMatcher().match(
+            contacts: [
+                hand(.leftWrist, 0, 30, 0), hand(.rightWrist, 60, 90, 2), hand(.leftWrist, 120, 150, 3)
+            ],
+            to: route, scale: scale, config: config
+        )
+        let result = SectionSegmenter().segment(
+            route: route, reference: reference, attempt: attempt,
+            referenceFrameCount: 120, attemptFrameCount: 160
+        )
+        // A single frame is not a small span, it is an absent one — the pane
+        // cannot move and reads as a broken player.
+        for move in result.sections where move.attemptReached {
+            #expect(move.attemptRange.count > 1)
+        }
+        // The skipped-source move spans the attempt's approach to the target.
+        #expect(result.sections[1].divergence?.kind == .skippedHold)
+        #expect(result.sections[1].attemptRange == 0 ..< 60)
+    }
+
     @Test("A genuinely truncated attempt marks exactly one move")
     func truncationMarksOneMove() {
         let (route, scale, config) = ladderRoute()
