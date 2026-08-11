@@ -6,3 +6,11 @@ Tools/rtmpose/.venv/
 # 218MB pose model — fetch with Tools/rtmpose/fetch-model.sh rather than committing
 SendSociety/Models/*.onnx
 .DS_Store
+
+# Climbing footage. Kept out of the repository deliberately — see Fixtures/README.md.
+# Three reasons, in order: the clips show identifiable people, iPhone writes GPS
+# coordinates into the QuickTime metadata, and together they are ~350MB against a
+# repository that is otherwise under a megabyte.
+Fixtures/*.mov
+Fixtures/*.MOV
+gym-testing/
