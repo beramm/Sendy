@@ -9,15 +9,6 @@ enum AppNaming {
 struct SendSocietyApp: App {
     @State private var model = AppModel()
 
-    init() {
-        // RTMPose lives in the app target because ONNX Runtime does; Core has to
-        // keep building on macOS for the tests and the CLI. Registering it here
-        // is the seam.
-        if RTMPoseOnnxExtractor.isInstalled {
-            PoseExtractorFactory.register(.rtmPose) { RTMPoseOnnxExtractor() }
-        }
-    }
-
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -4,7 +4,7 @@ import CoreVideo
 import Vision
 
 /// Pose is a **vendor choice**, not a project risk. Everything downstream talks
-/// to this protocol so Vision can be swapped for RTMPose or MoveNet without a
+/// to this protocol so Vision can be swapped for another model without a
 /// single change outside this file.
 public protocol PoseExtractor: Sendable {
     /// Extracts pose for a whole video. Must be cancellable via task

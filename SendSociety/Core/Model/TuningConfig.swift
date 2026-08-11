@@ -34,7 +34,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// The field stays because the concept is still right — the two joint groups
     /// serve different purposes, and a different pose model will have a
     /// different confidence distribution, at which point this becomes the knob
-    /// that lets RTMPose be judged on its own scale rather than Vision's.
+    /// that lets it be judged on its own scale rather than Vision's.
     public var extremityConfidenceFloor: Double = 0.30
     /// Frames whose torso joints fall below `jointConfidenceFloor` are dropped
     /// and interpolated across, up to this many consecutive frames.

@@ -11,30 +11,15 @@ let package = Package(
     products: [
         .library(name: "VideoOverlapCore", targets: ["VideoOverlapCore"])
     ],
-    dependencies: [
-        // Same ONNX Runtime the app target uses, so the RTMPose extractor can be
-        // exercised from the command line and checked against the Python
-        // implementation numericallyrather than trusted.
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.24.0")
-    ],
     targets: [
         .target(
             name: "VideoOverlapCore",
             path: "SendSociety/Core",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        .target(
-            name: "VideoOverlapRTMPose",
-            dependencies: [
-                "VideoOverlapCore",
-                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager")
-            ],
-            path: "SendSociety/App/Pose",
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
         .executableTarget(
             name: "posecli",
-            dependencies: ["VideoOverlapCore", "VideoOverlapRTMPose"],
+            dependencies: ["VideoOverlapCore"],
             path: "Tools/PoseCLI",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

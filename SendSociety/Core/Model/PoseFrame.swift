@@ -32,7 +32,7 @@ public enum JointName: String, Sendable, Codable, CaseIterable, Hashable {
 /// rather than Swift's default alternating `[key, value, key, value]` array.
 ///
 /// This is interop, not cosmetics. The pose cache is the interchange format
-/// between this app and any other pose model — a Python RTMPose script writes
+/// between this app and any other pose model — an external script can write
 /// the same file and it drops straight into the pipeline. An alternating array
 /// is unreadable when debugging and needlessly hostile to produce elsewhere.
 extension JointName: CodingKeyRepresentable {}

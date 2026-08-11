@@ -24,15 +24,6 @@ struct TuningPanelView: View {
                 }
                 .pickerStyle(.segmented)
 
-                if model.session?.poseSource == .rtmPose {
-                    Toggle("Use CoreML (Neural Engine)", isOn: Binding(
-                        get: { RTMPoseOnnxExtractor.useCoreML },
-                        set: { RTMPoseOnnxExtractor.useCoreML = $0 }
-                    ))
-                    Text("On by default: measured at 0.66 GB and 80 fps against 1.85 GB and 35 fps on CPU. Turning it off is a diagnostic, not an optimisation.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-
                 if let source = model.session?.poseSource {
                     Text(source.detail).font(.caption2).foregroundStyle(.secondary)
                     if !PoseExtractorFactory.isAvailable(source) {

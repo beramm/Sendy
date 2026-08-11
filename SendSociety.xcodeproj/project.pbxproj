@@ -11,7 +11,6 @@
 		768499243024DB23005A2538 /* tasks.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499223024DB23005A2538 /* tasks.md */; };
 		768499253024DB23005A2538 /* plan.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499213024DB23005A2538 /* plan.md */; };
 		768499263024DB23005A2538 /* claude.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499203024DB23005A2538 /* claude.md */; };
-		76A0001C3100000000000003 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = 76A0001B3100000000000002 /* onnxruntime */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,7 +34,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				76A0001C3100000000000003 /* onnxruntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -81,9 +79,6 @@
 				768499113024D303005A2538 /* SendSociety */,
 			);
 			name = SendSociety;
-			packageProductDependencies = (
-				76A0001B3100000000000002 /* onnxruntime */,
-			);
 			productName = SendSociety;
 			productReference = 7684990F3024D303005A2538 /* SendSociety.app */;
 			productType = "com.apple.product-type.application";
@@ -112,9 +107,6 @@
 			);
 			mainGroup = 768499063024D303005A2538;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				76A0001A3100000000000001 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 768499103024D303005A2538 /* Products */;
 			projectDirPath = "";
@@ -364,24 +356,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		76A0001A3100000000000001 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/microsoft/onnxruntime-swift-package-manager";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.24.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		76A0001B3100000000000002 /* onnxruntime */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 76A0001A3100000000000001 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */;
-			productName = onnxruntime;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 768499073024D303005A2538 /* Project object */;
 }

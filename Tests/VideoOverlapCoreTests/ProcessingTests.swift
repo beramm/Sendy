@@ -233,64 +233,11 @@ struct PoseSourceTests {
         return session
     }
 
-    /// Task 8.0 — the trap. Without the source in the cache key, switching pose
-    /// model reads the *other* model's cached pose, so you compare a tracker
-    /// against itself, see no difference, and conclude the models are
-    /// equivalent. The "reprocessing never re-extracts" guarantee makes the
-    /// stale read the designed behaviour rather than an obvious bug.
-    @Test("Switching pose source does not read the other source's cache")
-    func cacheIsKeyedBySource() async throws {
-        let root = URL.temporaryDirectory.appendingPathComponent("VOSrc-\(UUID().uuidString)")
-        let store = SessionStore(root: root)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        var session = try await makeSession(store: store)
-        let reference = try #require(session.reference)
-
-        // Two obviously different sequences, one per source.
-        let visionPose = SyntheticClimb.climb(moves: 4)
-        let otherPose = SyntheticClimb.climb(moves: 2)
-        #expect(visionPose.count != otherPose.count)
-
-        try await store.cachePose(visionPose, session: session, video: reference, source: .vision)
-        try await store.cachePose(otherPose, session: session, video: reference, source: .rtmPose)
-
-        let readVision = await store.cachedPose(session: session, video: reference, source: .vision)
-        let readOther = await store.cachedPose(session: session, video: reference, source: .rtmPose)
-        #expect(readVision?.count == visionPose.count)
-        #expect(readOther?.count == otherPose.count)
-        #expect(readVision?.count != readOther?.count, "the two sources returned the same pose")
-
-        // A source with nothing cached must miss, not fall back to the other.
-        session.poseSource = .rtmPose
-        let attempt = try #require(session.attempts.first)
-        #expect(await store.cachedPose(session: session, video: attempt, source: .rtmPose) == nil)
-        #expect(await store.hasCachedPose(session: session, video: attempt, source: .rtmPose) == false)
-    }
-
-    /// The pipeline must pick its extractor from the session, and an
-    /// unavailable model must fail with its own reason rather than silently
-    /// running Vision — a silent fallback produces a "comparison" in which both
-    /// sides are the same model.
-    @Test("An unavailable pose source fails loudly instead of falling back")
-    func unavailableSourceFailsLoudly() async throws {
-        let root = URL.temporaryDirectory.appendingPathComponent("VOSrc-\(UUID().uuidString)")
-        let store = SessionStore(root: root)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        var session = try await makeSession(store: store)
-        session.poseSource = .rtmPose
-        try await store.save(session)
-
-        #expect(PoseExtractorFactory.isAvailable(.vision))
-        #expect(!PoseExtractorFactory.isAvailable(.rtmPose), "flip this when the model is bundled")
-
-        // No extractor override, so the pipeline resolves one from the session.
-        let pipeline = ProcessingPipeline(store: store)
-        await #expect(throws: PoseExtractionError.self) {
-            _ = try await pipeline.process(session: session, config: TuningConfig())
-        }
-    }
+    /// Both the cache-keying trap and the loud-failure test needed a *second*
+    /// `PoseSource` to exercise. RTMPose was removed, so they are gone with it —
+    /// the guarantees still hold in `SessionStore.poseURL` and
+    /// `UnavailablePoseExtractor`, and these tests come back the moment a second
+    /// source does.
 
     @Test("A session saved before pose sources existed still decodes")
     func decodesLegacySession() throws {

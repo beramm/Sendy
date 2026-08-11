@@ -4,7 +4,6 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import VideoOverlapCore
-import VideoOverlapRTMPose
 
 // The Phase 0 pose harness (task 0.0d): decode frames, run pose, dump JSON,
 // render skeletons. Exists so thresholds are tuned against real footage while
@@ -444,41 +443,6 @@ func commandPipeline(_ args: [String]) async throws {
     try? FileManager.default.removeItem(at: root)
 }
 
-// MARK: - rtmpose (the Swift implementation, so it can be checked against Python)
-
-func commandRTMPose(_ args: [String]) async throws {
-    let rest = Array(args.dropFirst())
-    guard rest.count >= 1 else { throw CLIError("usage: posecli rtmpose <video> --model model.onnx --out pose.json") }
-    let model = arg("model", args) ?? "SendSociety/Models/rtmpose_wholebody.onnx"
-    guard FileManager.default.fileExists(atPath: model) else {
-        throw CLIError("model not found at \(model) — run Tools/rtmpose/fetch-model.sh")
-    }
-    RTMPoseOnnxExtractor.explicitModelPath = model
-    if args.contains("--cpu") { RTMPoseOnnxExtractor.useCoreML = false }
-    RTMPoseOnnxExtractor.skipInference = args.contains("--skipmodel")
-    if let dir = arg("dumpcrops", args) {
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        RTMPoseOnnxExtractor.debugCropDirectory = dir
-    }
-
-    var config = configFrom(args)
-    if let r = arg("rate", args).flatMap(Double.init) { config.workingFrameRate = r }
-    let out = arg("out", args) ?? "rtmpose.json"
-
-    let start = Date()
-    let sequence = try await RTMPoseOnnxExtractor().extract(
-        url: URL(fileURLWithPath: rest[0]), config: config
-    ) { p in
-        FileHandle.standardError.write("  \(Int(p * 100))%\r".data(using: .utf8)!)
-    }
-    try saveSequence(sequence, to: out)
-    let elapsed = Date().timeIntervalSince(start)
-    print("\nframes: \(sequence.count) in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", Double(sequence.count) / elapsed)) fps)")
-    for w in sequence.warnings { print("warning: \(w)") }
-    print(qualityTable(sequence))
-    print("wrote \(out)")
-}
-
 // MARK: - agree (does the Swift port match the Python reference?)
 
 func commandAgree(_ args: [String]) throws {
@@ -561,7 +525,7 @@ func commandCompare(_ args: [String]) async throws {
         throw CLIError("""
         usage: posecli compare <reference.mov> <attempt.mov> \
                  [--a-ref pose.json --a-att pose.json] [--a-label Vision] \
-                 --b-ref pose.json --b-att pose.json [--b-label RTMPose]
+                 --b-ref pose.json --b-att pose.json [--b-label Other]
 
         Omit --a-* to run Vision live as the baseline.
         """)
@@ -578,7 +542,7 @@ func commandCompare(_ args: [String]) async throws {
         root: root, config: config
     )
     let b = try await runTracker(
-        label: arg("b-label", args) ?? "RTMPose",
+        label: arg("b-label", args) ?? "Other",
         referenceVideo: rest[0], attemptVideo: rest[1],
         referencePose: try arg("b-ref", args).map(loadSequence),
         attemptPose: try arg("b-att", args).map(loadSequence),
@@ -720,7 +684,6 @@ guard let command = cliArgs.first else {
       frames   <video> <poses.json> --indices 10,50 [--out dir] [--holds]
       pipeline <reference.mov> <attempt.mov>
       jitter   <poses.json>
-      rtmpose  <video> [--model m.onnx] --out pose.json
       agree    <swift.json> <python.json>
       compare  <reference.mov> <attempt.mov> --b-ref p.json --b-att p.json
                [--a-ref p.json --a-att p.json] [--a-label X --b-label Y]
@@ -740,7 +703,6 @@ do {
     case "pipeline": try await commandPipeline(cliArgs)
     case "seed": try await commandSeed(cliArgs)
     case "compare": try await commandCompare(cliArgs)
-    case "rtmpose": try await commandRTMPose(cliArgs)
     case "agree": try commandAgree(cliArgs)
     case "drift": try await commandDrift(cliArgs)
     default: throw CLIError("unknown command \(command)")

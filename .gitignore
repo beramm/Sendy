@@ -2,9 +2,6 @@
 .work/
 DerivedData/
 *.xcuserdatad
-Tools/rtmpose/.venv/
-# 218MB pose model — fetch with Tools/rtmpose/fetch-model.sh rather than committing
-SendSociety/Models/*.onnx
 .DS_Store
 
 # Climbing footage. Kept out of the repository deliberately — see Fixtures/README.md.
@@ -20,3 +17,4 @@ gym-testing/
 # Root README only. A bare `!README.md` would also un-ignore Fixtures/README.md,
 # which documents footage that is deliberately not published.
 !/README.md
+.swiftpm/
