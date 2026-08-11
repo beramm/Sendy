@@ -132,6 +132,21 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// with a genuinely low finish needs.
     public var topOutDropMargin: Double = 0.50
 
+    /// How far above the lowest observed foot position, in body-lengths, still
+    /// counts as **standing on the ground** rather than on a foothold.
+    ///
+    /// The climb starts when both feet have left the floor. Before that the
+    /// climber is arranging themselves on the start holds, and hand movements
+    /// there are setup, not moves. On `gym-testing/test1` the reference takes
+    /// two hand holds at the same height while its right foot is still down —
+    /// matching onto the start holds — which produced a first "move" that was
+    /// nothing of the kind.
+    ///
+    /// Measured on that pair: ground contacts sit at y 0.066–0.087 and the
+    /// first real foothold at 0.159, against a torso of ~0.10. Half a
+    /// body-length separates them comfortably.
+    public var groundMargin: Double = 0.50
+
     // MARK: Depth (foreshortening)
 
     /// Percentile of observed segment length taken as `L_true`.
@@ -270,6 +285,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Route", label: "Max plausible holds", help: "Above this, warn", kind: .int(\.maxPlausibleHolds, range: 5 ... 60)),
         .init(group: "Route", label: "Attempt match radius (BL)", help: "Beyond this an attempt contact is off-route", kind: .double(\.routeMatchRadius, range: 0.05 ... 3, step: 0.05)),
         .init(group: "Route", label: "Top-out drop margin (BL)", help: "Hands going this far below the top hold end the climb; raise to disable", kind: .double(\.topOutDropMargin, range: 0.1 ... 10, step: 0.1)),
+        .init(group: "Route", label: "Ground margin (BL)", help: "Feet within this of the lowest point are on the floor; the climb starts once both leave it", kind: .double(\.groundMargin, range: 0 ... 3, step: 0.05)),
 
         .init(group: "Depth", label: "Segment length percentile", help: "Percentile taken as true limb length", kind: .double(\.segmentLengthPercentile, range: 0.5 ... 1, step: 0.01)),
         .init(group: "Depth", label: "Confidence floor", help: "z suppressed below this", kind: .double(\.depthConfidenceFloor, range: 0 ... 1, step: 0.01)),

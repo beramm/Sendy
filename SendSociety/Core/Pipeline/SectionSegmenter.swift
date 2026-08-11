@@ -36,6 +36,45 @@ public struct SectionSegmenter: Sendable {
         var warnings: [String] = []
         var refAcquisitions = reference.handAcquisitions
 
+        // **The climb starts once both feet are off the floor.**
+        //
+        // Before that the climber is arranging themselves on the start holds,
+        // and hands moving between them is setup, not climbing. On
+        // `gym-testing/test1` the reference takes two hand holds at the same
+        // height while its right foot is still down — a match onto the start
+        // holds — which became "move 1" and compared against nothing
+        // meaningful in the attempt.
+        //
+        // The floor is read from the data rather than assumed: the lowest foot
+        // contact in the climb, plus `groundMargin`. On that pair ground
+        // contacts sit at y 0.066–0.087 and the first foothold at 0.159, so the
+        // separation is about a body-length.
+        //
+        // Ground contacts after the high point are ignored, because those are a
+        // climber landing rather than starting.
+        if let scale, config.groundMargin > 0 {
+            let footContacts = reference.matched.map(\.contact).filter(\.isFoot)
+            let topFrame = refAcquisitions
+                .compactMap { a in (route.hold(id: a.holdID)?.position.y).map { (a.frame, $0) } }
+                .max { $0.1 < $1.1 }?.0 ?? Int.max
+            if let floor = footContacts.map(\.position.y).min() {
+                let line = floor + config.groundMargin * scale.torsoLength
+                let onGround = footContacts.filter { $0.position.y <= line && $0.endFrame <= topFrame }
+                if let leftFloor = onGround.map(\.endFrame).max() {
+                    let climbStart = leftFloor + 1
+                    // Everything up to that frame is the starting position. Keep
+                    // the last hold taken there as the first move's origin.
+                    if let originIndex = refAcquisitions.lastIndex(where: { $0.frame <= climbStart }), originIndex > 0 {
+                        refAcquisitions = Array(refAcquisitions.dropFirst(originIndex))
+                        warnings.append(
+                            "The climb is measured from frame \(climbStart), where both feet left the floor. "
+                            + "\(originIndex) earlier hand hold\(originIndex == 1 ? "" : "s") were treated as the starting position."
+                        )
+                    }
+                }
+            }
+        }
+
         // **A boulder ends at the top hold.**
         //
         // Hands that go somewhere lower afterwards are the climber coming down,
@@ -226,6 +265,57 @@ public struct SectionSegmenter: Sendable {
                 attemptRange: attemptRange,
                 divergence: divergence
             ))
+        }
+
+        // **The attempt's spans must advance.**
+        //
+        // Moves are ordered in time, so the attempt's frame ranges have to be
+        // too. They were not: on `gym-testing/test1` move 5's attempt span
+        // started at frame 199 while move 4's started at 225 — the attempt
+        // timeline running backwards between consecutive moves — and moves 7
+        // and 8 shared the identical span 436-625, so the attempt pane replayed
+        // the same footage for two different moves.
+        //
+        // Both come from the divergent branches choosing an end independently
+        // of what the previous move already claimed. Clamping here rather than
+        // in each branch keeps the invariant in one place, where it can be
+        // read and tested.
+        //
+        // A move squeezed to nothing is left unreached rather than given a
+        // one-frame span, because a pane that cannot move reads as a broken
+        // player, not as a reported difference.
+        var cursor = 0
+        var squeezed = 0
+        for i in sections.indices where !sections[i].attemptRange.isEmpty {
+            let range = sections[i].attemptRange
+            let lower = max(range.lowerBound, cursor)
+            let upper = max(range.upperBound, lower)
+            if upper - lower < 2 {
+                sections[i].attemptRange = 0 ..< 0
+                // **Not "unreached".** The attempt climbed this move; it just
+                // took the holds in an order that leaves no stretch of its
+                // video sitting between the neighbouring moves. Saying "you
+                // didn't get this far" here would be a plain lie, and it is
+                // the discouraging kind.
+                sections[i].divergence = BetaDivergence(
+                    kind: .differentHandOrder,
+                    detail: "You didn't climb this as a separate move — you either went straight past a hold "
+                          + "or took them in a different order, so there is no matching stretch of your climb here.",
+                    positions: [sections[i].fromHold.position, sections[i].toHold.position]
+                )
+                squeezed += 1
+            } else {
+                sections[i].attemptRange = lower ..< upper
+                // Consecutive moves share their boundary frame, so the next may
+                // start one before this one ended.
+                cursor = upper - 1
+            }
+        }
+        if squeezed > 0 {
+            warnings.append(
+                "\(squeezed) move\(squeezed == 1 ? "" : "s") had no attempt footage left once the spans were "
+                + "put in order — the attempt took these holds out of the reference's sequence."
+            )
         }
 
         // Hand order divergence: the attempt visited the shared holds in a

@@ -392,9 +392,13 @@ struct ContactRouteTests {
         for move in result.sections where move.attemptReached {
             #expect(move.attemptRange.count > 1)
         }
-        // The skipped-source move spans the attempt's approach to the target.
-        #expect(result.sections[1].divergence?.kind == .skippedHold)
-        #expect(result.sections[1].attemptRange == 0 ..< 61)
+        // Moves 1 and 2 both want the attempt's single 0-60 stretch, since it
+        // skipped the hold between them. Only the first keeps it; the second
+        // is left with no footage and says so, rather than claiming the
+        // climber never got there.
+        #expect(result.sections[0].attemptRange == 0 ..< 61)
+        #expect(result.sections[1].divergence?.kind == .differentHandOrder)
+        #expect(result.sections[1].attemptRange.isEmpty)
     }
 
     @Test("A genuinely truncated attempt marks exactly one move")

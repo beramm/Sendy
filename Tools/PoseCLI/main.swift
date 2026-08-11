@@ -417,6 +417,31 @@ func commandPipeline(_ args: [String]) async throws {
     print(String(format: "registration residual %.5f  succeeded %@", result.alignment.residual, result.alignment.succeeded ? "yes" : "NO"))
     print("fall: \(result.fallReport.occurred ? "move \((result.fallReport.fallSectionIndex ?? -1) + 1)" : "none")")
 
+    // Per-move frame spans for both climbers.
+    //
+    // Every scrubber complaint from the gym — teleporting, a frozen pane, a
+    // pane already on the next hold — has come down to one of these spans being
+    // the wrong width, and each was diagnosed by reasoning about code rather
+    // than reading the numbers. Printing them makes that a one-command check.
+    //
+    // `ratio` is attempt frames per reference frame. Far from 1 means locked
+    // playback has to warp hard, which is what reads as teleporting.
+    print("\nSPANS  (ref and attempt frame ranges per move)")
+    print("move   reference        n   attempt          n   ratio  note")
+    for s in result.sections {
+        let refN = s.referenceRange.count
+        let attN = s.attemptRange.count
+        let ratio = refN > 0 ? Double(attN) / Double(refN) : 0
+        print(String(
+            format: "%4d   %5d-%-5d %5d   %5d-%-5d %5d   %5.2f  %@",
+            s.index + 1,
+            s.referenceRange.lowerBound, s.referenceRange.upperBound, refN,
+            s.attemptRange.lowerBound, s.attemptRange.upperBound, attN,
+            ratio,
+            s.divergence.map { $0.kind.rawValue } ?? (s.attemptReached ? "" : "unreached")
+        ))
+    }
+
     for analysis in result.analyses {
         print("\n\(analysis.headline)")
         for note in analysis.observations {

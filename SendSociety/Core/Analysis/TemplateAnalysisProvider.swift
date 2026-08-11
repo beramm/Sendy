@@ -25,6 +25,24 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         // difference — the climber fell or stopped before getting there — and
         // calling it "you climbed this differently" is both wrong and
         // discouraging. Reached-ness is checked first for that reason.
+        // Checked before reached-ness. A move with no attempt footage is not
+        // necessarily a move the attempt never got to — it can also be one it
+        // climbed in a different order, leaving no stretch of video that sits
+        // between the neighbouring moves. Those are opposite claims, and
+        // telling a climber they didn't get somewhere they did get is the
+        // discouraging kind of wrong.
+        if let divergence = delta.divergence, divergence.kind == .differentHandOrder {
+            return SectionAnalysis(
+                sectionIndex: delta.sectionIndex,
+                headline: "\(delta.sectionName): you climbed this in a different order",
+                observations: [AnalysisNote(
+                    text: divergence.detail,
+                    evidence: "Beta divergence: differentHandOrder. No comparable span in the attempt."
+                )],
+                drill: nil,
+                source: name
+            )
+        }
         guard delta.attemptReached else {
             return SectionAnalysis(
                 sectionIndex: delta.sectionIndex,
