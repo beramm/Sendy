@@ -169,7 +169,30 @@ public struct Section: Sendable, Codable, Hashable, Identifiable {
     }
 
     public var id: Int { index }
+    /// Whether there is attempt footage to show for this move.
+    ///
+    /// **Not the same as "the attempt got here".** A move can have no footage
+    /// because the attempt never reached it, or because the attempt climbed it
+    /// in an order that leaves no stretch of its video sitting between the
+    /// neighbouring moves. Those are opposite claims about the climber, so
+    /// anything user-facing must ask `attemptClimbedOutOfOrder` first.
     public var attemptReached: Bool { !attemptRange.isEmpty }
+
+    /// Climbed, but with no comparable span — the attempt took these holds out
+    /// of the reference's sequence.
+    ///
+    /// Exists because the UI derived "not reached" from an empty range alone,
+    /// and so told a climber they had not got somewhere they had in fact
+    /// climbed, directly above analysis text saying the opposite.
+    public var attemptClimbedOutOfOrder: Bool {
+        attemptRange.isEmpty && divergence?.kind == .differentHandOrder
+    }
+
+    /// The honest short label for a move with no footage.
+    public var unavailableReason: String? {
+        if attemptReached { return nil }
+        return attemptClimbedOutOfOrder ? "different order" : "not reached"
+    }
     /// Human label. Sections are moves, so they are 1-based on screen.
     public var displayName: String { "Move \(index + 1)" }
 }

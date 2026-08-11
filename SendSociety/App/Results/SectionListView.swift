@@ -59,7 +59,7 @@ struct SectionListView: View {
         parts.append("ref frames \(section.referenceRange.lowerBound)–\(section.referenceRange.upperBound)")
         parts.append(section.attemptReached
                      ? "attempt \(section.attemptRange.lowerBound)–\(section.attemptRange.upperBound)"
-                     : "not reached")
+                     : (section.unavailableReason ?? "not reached"))
         if let cost = processed.warpPath(forSection: section.index)?.meanCost, cost.isFinite {
             parts.append(String(format: "DTW cost %.2f", cost))
         }
@@ -128,7 +128,10 @@ struct RawMetricsView: View {
         lines.append("METRICS PER MOVE   (reference | attempt | delta | confidence)")
         for delta in processed.deltas {
             lines.append("")
-            lines.append("\(delta.sectionName)\(delta.attemptReached ? "" : "  [not reached]")\(delta.divergence.map { "  [\($0.kind.rawValue)]" } ?? "")")
+            let unavailable = delta.attemptReached
+                ? ""
+                : (delta.divergence?.kind == .differentHandOrder ? "  [different order]" : "  [not reached]")
+            lines.append("\(delta.sectionName)\(unavailable)\(delta.divergence.map { "  [\($0.kind.rawValue)]" } ?? "")")
             if let divergence = delta.divergence { lines.append("  \(divergence.detail)") }
             for metric in delta.deltas {
                 lines.append(String(format: "  %-32@ %10@ %10@ %10@  %.2f  %@",

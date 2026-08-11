@@ -128,7 +128,10 @@ struct ResultsView: View {
                     title: processed.attempt?.label ?? "Attempt",
                     video: processed.attempt,
                     pose: processed.attemptPose,
-                    frameIndex: frames.attempt
+                    frameIndex: frames.attempt,
+                    unavailableReason: processed.sections.indices.contains(position.sectionIndex)
+                        ? (processed.sections[position.sectionIndex].unavailableReason ?? "not reached")
+                        : "not reached"
                 )
             }
         case .overlay:
@@ -351,7 +354,7 @@ struct MoveScrubber: View {
         guard processed.sections.indices.contains(position.sectionIndex) else { return "no moves" }
         let section = processed.sections[position.sectionIndex]
         var text = "Move \(position.sectionIndex + 1) of \(processed.sections.count)  \(Int(position.offset * 100))%"
-        if !section.attemptReached { text += "  (not reached)" }
+        if let reason = section.unavailableReason { text += "  (\(reason))" }
         switch section.divergence?.kind {
         case .truncated: text += "  (came off here)"
         case .some: text += "  (different sequence)"
@@ -402,6 +405,10 @@ struct ClimberPane: View {
     /// Only for the frame timestamp — the pane draws video, nothing derived.
     let pose: PoseSequence
     let frameIndex: Int?
+    /// Why there is no frame, when there isn't one. "Not reached" and
+    /// "different order" are opposite claims about the climber, and the pane
+    /// used to assert the first for both.
+    var unavailableReason: String = "not reached"
 
     @State private var image: CGImage?
     @State private var cache = FrameImageCache()
@@ -424,7 +431,7 @@ struct ClimberPane: View {
                 // analytical overlays belong in skeleton-only mode, which
                 // exists precisely because they are illegible over footage.
                 if frameIndex == nil {
-                    Text("not reached")
+                    Text(unavailableReason)
                         .font(.caption)
                         .padding(4)
                         .background(.thinMaterial)
