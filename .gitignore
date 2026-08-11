@@ -14,3 +14,6 @@ SendSociety/Models/*.onnx
 Fixtures/*.mov
 Fixtures/*.MOV
 gym-testing/
+
+# Project documentation and notes — kept local, not published.
+*.md
