@@ -17,3 +17,4 @@ gym-testing/
 
 # Project documentation and notes — kept local, not published.
 *.md
+!README.md
