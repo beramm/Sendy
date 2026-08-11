@@ -96,3 +96,31 @@ struct ModelTests {
         #expect(nearContacts.contacts.count == farContacts.contacts.count)
     }
 }
+
+@Suite("Saved config compatibility")
+struct TuningConfigCompatibilityTests {
+
+    /// A session saved before a threshold existed must still open.
+    ///
+    /// This is not hypothetical: `gym-testing/test1` was seeded onto a phone,
+    /// then `groundMargin` and `topOutDropMargin` were added, and the session
+    /// on the device still held the 44-key config. Swift's synthesised
+    /// `Decodable` throws on a missing key, so without care the whole session
+    /// becomes unopenable — losing a recording because a slider was added
+    /// later would be the worst possible failure for a debug harness.
+    @Test("A config saved without a newer field still decodes")
+    func olderConfigDecodes() throws {
+        let encoded = try JSONEncoder().encode(TuningConfig())
+        var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        object.removeValue(forKey: "groundMargin")
+        object.removeValue(forKey: "topOutDropMargin")
+        let trimmed = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try? JSONDecoder().decode(TuningConfig.self, from: trimmed)
+        #expect(decoded != nil, "a config missing a newer field must still decode")
+        // …and the absent fields must come back as their defaults, not zero,
+        // because zero disables both rules silently.
+        #expect(decoded?.groundMargin == TuningConfig().groundMargin)
+        #expect(decoded?.topOutDropMargin == TuningConfig().topOutDropMargin)
+    }
+}

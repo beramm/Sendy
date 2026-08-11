@@ -263,6 +263,73 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         public var kind: Kind
     }
 
+
+    // MARK: Lenient decoding
+
+    /// Every field falls back to its default when absent.
+    ///
+    /// Swift's synthesised `Decodable` throws on a missing key, which meant
+    /// that **adding a threshold orphaned every session already saved**.
+    /// `ClimbSession` decodes `config` hard and `SessionStore.loadAll` wraps
+    /// the whole thing in `try?`, so the failure was silent: the session did
+    /// not error, it vanished from the list. Losing a gym recording because a
+    /// slider was added afterwards is the worst outcome this harness has.
+    ///
+    /// Written out field by field rather than left to synthesis, because the
+    /// synthesised version is exactly the thing that was wrong. A test
+    /// (`olderConfigDecodes`) strips the newest keys and asserts the defaults
+    /// come back.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = TuningConfig()
+        jointConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .jointConfidenceFloor) ?? d.jointConfidenceFloor
+        extremityConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .extremityConfidenceFloor) ?? d.extremityConfidenceFloor
+        maxInterpolatedGapFrames = try c.decodeIfPresent(Int.self, forKey: .maxInterpolatedGapFrames) ?? d.maxInterpolatedGapFrames
+        workingFrameRate = try c.decodeIfPresent(Double.self, forKey: .workingFrameRate) ?? d.workingFrameRate
+        smoothingMinCutoff = try c.decodeIfPresent(Double.self, forKey: .smoothingMinCutoff) ?? d.smoothingMinCutoff
+        smoothingBeta = try c.decodeIfPresent(Double.self, forKey: .smoothingBeta) ?? d.smoothingBeta
+        smoothingDerivativeCutoff = try c.decodeIfPresent(Double.self, forKey: .smoothingDerivativeCutoff) ?? d.smoothingDerivativeCutoff
+        contactVelocityThreshold = try c.decodeIfPresent(Double.self, forKey: .contactVelocityThreshold) ?? d.contactVelocityThreshold
+        contactDwellFrames = try c.decodeIfPresent(Int.self, forKey: .contactDwellFrames) ?? d.contactDwellFrames
+        contactMergeRadius = try c.decodeIfPresent(Double.self, forKey: .contactMergeRadius) ?? d.contactMergeRadius
+        contactMergeGapFrames = try c.decodeIfPresent(Int.self, forKey: .contactMergeGapFrames) ?? d.contactMergeGapFrames
+        contactConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .contactConfidenceFloor) ?? d.contactConfidenceFloor
+        holdClusterEpsilon = try c.decodeIfPresent(Double.self, forKey: .holdClusterEpsilon) ?? d.holdClusterEpsilon
+        holdClusterMinPoints = try c.decodeIfPresent(Int.self, forKey: .holdClusterMinPoints) ?? d.holdClusterMinPoints
+        minPlausibleHolds = try c.decodeIfPresent(Int.self, forKey: .minPlausibleHolds) ?? d.minPlausibleHolds
+        maxPlausibleHolds = try c.decodeIfPresent(Int.self, forKey: .maxPlausibleHolds) ?? d.maxPlausibleHolds
+        routeMatchRadius = try c.decodeIfPresent(Double.self, forKey: .routeMatchRadius) ?? d.routeMatchRadius
+        topOutDropMargin = try c.decodeIfPresent(Double.self, forKey: .topOutDropMargin) ?? d.topOutDropMargin
+        groundMargin = try c.decodeIfPresent(Double.self, forKey: .groundMargin) ?? d.groundMargin
+        segmentLengthPercentile = try c.decodeIfPresent(Double.self, forKey: .segmentLengthPercentile) ?? d.segmentLengthPercentile
+        depthConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .depthConfidenceFloor) ?? d.depthConfidenceFloor
+        depthSmoothingAlpha = try c.decodeIfPresent(Double.self, forKey: .depthSmoothingAlpha) ?? d.depthSmoothingAlpha
+        straightArmDegrees = try c.decodeIfPresent(Double.self, forKey: .straightArmDegrees) ?? d.straightArmDegrees
+        loadedContactFraction = try c.decodeIfPresent(Double.self, forKey: .loadedContactFraction) ?? d.loadedContactFraction
+        loadIDWExponent = try c.decodeIfPresent(Double.self, forKey: .loadIDWExponent) ?? d.loadIDWExponent
+        deltaSignificanceThreshold = try c.decodeIfPresent(Double.self, forKey: .deltaSignificanceThreshold) ?? d.deltaSignificanceThreshold
+        fallAccelThreshold = try c.decodeIfPresent(Double.self, forKey: .fallAccelThreshold) ?? d.fallAccelThreshold
+        fallSustainSeconds = try c.decodeIfPresent(Double.self, forKey: .fallSustainSeconds) ?? d.fallSustainSeconds
+        fallRecontactWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .fallRecontactWindowSeconds) ?? d.fallRecontactWindowSeconds
+        bosMarginBodyLengths = try c.decodeIfPresent(Double.self, forKey: .bosMarginBodyLengths) ?? d.bosMarginBodyLengths
+        footSlipVelocityThreshold = try c.decodeIfPresent(Double.self, forKey: .footSlipVelocityThreshold) ?? d.footSlipVelocityThreshold
+        proximateWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .proximateWindowSeconds) ?? d.proximateWindowSeconds
+        barnDoorLateralRatio = try c.decodeIfPresent(Double.self, forKey: .barnDoorLateralRatio) ?? d.barnDoorLateralRatio
+        hipPeelMonotonicFraction = try c.decodeIfPresent(Double.self, forKey: .hipPeelMonotonicFraction) ?? d.hipPeelMonotonicFraction
+        hipPeelMinimumRise = try c.decodeIfPresent(Double.self, forKey: .hipPeelMinimumRise) ?? d.hipPeelMinimumRise
+        bentArmSlopeThreshold = try c.decodeIfPresent(Double.self, forKey: .bentArmSlopeThreshold) ?? d.bentArmSlopeThreshold
+        loadAsymmetrySlopeThreshold = try c.decodeIfPresent(Double.self, forKey: .loadAsymmetrySlopeThreshold) ?? d.loadAsymmetrySlopeThreshold
+        reachMarginSlopeThreshold = try c.decodeIfPresent(Double.self, forKey: .reachMarginSlopeThreshold) ?? d.reachMarginSlopeThreshold
+        dwellRatioSlopeThreshold = try c.decodeIfPresent(Double.self, forKey: .dwellRatioSlopeThreshold) ?? d.dwellRatioSlopeThreshold
+        armLoadSlopeThreshold = try c.decodeIfPresent(Double.self, forKey: .armLoadSlopeThreshold) ?? d.armLoadSlopeThreshold
+        clearMagnitudeMultiple = try c.decodeIfPresent(Double.self, forKey: .clearMagnitudeMultiple) ?? d.clearMagnitudeMultiple
+        largeMagnitudeMultiple = try c.decodeIfPresent(Double.self, forKey: .largeMagnitudeMultiple) ?? d.largeMagnitudeMultiple
+        depthCoverageFloor = try c.decodeIfPresent(Double.self, forKey: .depthCoverageFloor) ?? d.depthCoverageFloor
+        comCoverageFloor = try c.decodeIfPresent(Double.self, forKey: .comCoverageFloor) ?? d.comCoverageFloor
+        interpolatedConfidenceFactor = try c.decodeIfPresent(Double.self, forKey: .interpolatedConfidenceFactor) ?? d.interpolatedConfidenceFactor
+        registrationResidualLimit = try c.decodeIfPresent(Double.self, forKey: .registrationResidualLimit) ?? d.registrationResidualLimit
+    }
+
     public static let fields: [Field] = [
         .init(group: "Pose", label: "Torso confidence floor", help: "Torso joints below this are untracked", kind: .double(\.jointConfidenceFloor, range: 0 ... 1, step: 0.01)),
         .init(group: "Pose", label: "Extremity confidence floor", help: "Wrists and ankles — Vision scores these lower", kind: .double(\.extremityConfidenceFloor, range: 0 ... 1, step: 0.01)),
