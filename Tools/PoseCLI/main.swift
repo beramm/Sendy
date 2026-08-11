@@ -417,6 +417,21 @@ func commandPipeline(_ args: [String]) async throws {
     print(String(format: "registration residual %.5f  succeeded %@", result.alignment.residual, result.alignment.succeeded ? "yes" : "NO"))
     print("fall: \(result.fallReport.occurred ? "move \((result.fallReport.fallSectionIndex ?? -1) + 1)" : "none")")
 
+    // Sequences: the unit of comparison, bounded by holds both climbers used.
+    let sequenceResult = result.sequences
+    print(String(format: "\nSEQUENCES  %d, from %d anchors — anchor density %.0f%% of reference hand holds",
+                 sequenceResult.sequences.count, sequenceResult.anchorIDs.count, sequenceResult.anchorDensity * 100))
+    print("seq   anchors     reference        n   attempt          n   ratio  moves ref/att")
+    for s in sequenceResult.sequences {
+        print(String(
+            format: "%3d   %3d→%-3d   %5d-%-5d %5d   %5d-%-5d %5d   %5.2f    %d / %d",
+            s.index + 1, s.fromAnchorID, s.toAnchorID,
+            s.referenceRange.lowerBound, s.referenceRange.upperBound, s.referenceRange.count,
+            s.attemptRange.lowerBound, s.attemptRange.upperBound, s.attemptRange.count,
+            s.frameRatio, s.referenceMoves.count, s.attemptMoves.count))
+    }
+    for w in sequenceResult.warnings { print("  warning: \(w)") }
+
     // Per-move frame spans for both climbers.
     //
     // Every scrubber complaint from the gym — teleporting, a frozen pane, a

@@ -6,9 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		7684990F3024D303005A2538 /* SendSociety.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SendSociety.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -339,7 +336,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = 768499073024D303005A2538 /* Project object */;
 }

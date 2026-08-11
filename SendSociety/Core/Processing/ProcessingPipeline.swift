@@ -45,6 +45,14 @@ public struct ProcessedSession: Sendable {
     public var attemptContacts: [Contact]
     public var route: Route
     public var sections: [Section]
+    /// Sequences: the span between two holds **both** climbers took with a
+    /// hand, holding however many moves each of them needed to cross it.
+    ///
+    /// The unit of comparison, where `sections` is the unit of measurement. A
+    /// sequence is allowed to contain three of one climber's moves against one
+    /// of the other's — that difference is a finding, not a mismatch to
+    /// suppress.
+    public var sequences: SequenceResult
     public var warpPaths: [WarpPath]
     public var referenceMetrics: ClimbMetrics
     public var attemptMetrics: ClimbMetrics
@@ -261,6 +269,17 @@ public actor ProcessingPipeline {
             config: config
         )
         let sections = segmentation.sections
+
+        // Sequences — the only stage that sees both climbs. Built from each
+        // climber's own hand acquisitions, so neither beta is derived from the
+        // other, and anchored only on holds both of them actually took.
+        let sequenceResult = SequenceBuilder().build(
+            route: route,
+            referenceAcquisitions: referenceMatch.handAcquisitions,
+            attemptAcquisitions: attemptMatch.handAcquisitions,
+            referenceFrameCount: referencePose.count,
+            attemptFrameCount: attemptPose.count
+        )
         report(
             "Moves", t,
             sections.isEmpty ? .failed : (segmentation.warnings.isEmpty ? .ok : .degraded),
@@ -392,6 +411,7 @@ public actor ProcessingPipeline {
             attemptContacts: attemptContactResult.contacts,
             route: route,
             sections: sections,
+            sequences: sequenceResult,
             warpPaths: warpPaths,
             referenceMetrics: referenceMetrics,
             attemptMetrics: attemptMetrics,

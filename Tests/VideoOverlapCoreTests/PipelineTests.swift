@@ -526,3 +526,88 @@ struct ContactRouteTests {
         #expect(zip(acquisitions, acquisitions.dropFirst()).allSatisfy { $0.frame < $1.frame })
     }
 }
+
+@Suite("Sequences")
+struct SequenceBuilderTests {
+
+    private func route(_ n: Int) -> Route {
+        Route(holds: (0 ..< n).map { i in
+            Hold(id: i, position: Point2D(x: 0.4, y: 0.2 + 0.1 * Double(i)),
+                 firstUsedBy: .leftWrist, ordinal: i, contactCount: 1, firstFrame: i * 10)
+        })
+    }
+
+    /// The case the whole layer exists for, from the project's own worked
+    /// example: holds a, b, c with footholds. The reference reaches a → c
+    /// directly with still feet — one move. The attempt cannot span it, so it
+    /// steps a foot, matches a hand to b, then reaches c — three moves.
+    /// Both took a and c with a hand, so it is **one sequence**.
+    @Test("Three moves against one is one sequence, not a mismatch")
+    func aToCIsOneSequence() {
+        let result = SequenceBuilder().build(
+            route: route(3),
+            referenceAcquisitions: [(0, 0), (100, 2)],
+            attemptAcquisitions: [(0, 0), (60, 1), (120, 2)],
+            referenceFrameCount: 200, attemptFrameCount: 200
+        )
+        #expect(result.sequences.count == 1)
+        let s = result.sequences[0]
+        #expect(s.fromAnchorID == 0 && s.toAnchorID == 2)
+        #expect(s.referenceMoves.count == 1)
+        #expect(s.attemptMoves.count == 2, "attempt crosses a→b→c")
+        #expect(s.moveCountDelta == 1)
+        // Hold 1 is the attempt's alone, so it cannot anchor.
+        #expect(result.anchorIDs == [0, 2])
+    }
+
+    /// Task 9.4. The attempt taking a shared hold out of the reference's order
+    /// must not create a sequence that runs backwards — that is the defect the
+    /// move-level layer had, seen on gym-testing/test1 as the climber
+    /// teleporting.
+    @Test("A hold taken out of order is demoted rather than anchoring backwards")
+    func outOfOrderHoldDoesNotAnchor() {
+        let result = SequenceBuilder().build(
+            route: route(4),
+            referenceAcquisitions: [(0, 0), (50, 1), (100, 2), (150, 3)],
+            // The attempt takes hold 2 *before* hold 1.
+            attemptAcquisitions: [(0, 0), (40, 2), (90, 1), (140, 3)],
+            referenceFrameCount: 200, attemptFrameCount: 200
+        )
+        for s in result.sequences {
+            #expect(!s.referenceRange.isEmpty)
+            #expect(!s.attemptRange.isEmpty)
+            #expect(s.attemptRange.lowerBound < s.attemptRange.upperBound)
+        }
+        // Spans advance monotonically in both panes, by construction.
+        for (a, b) in zip(result.sequences, result.sequences.dropFirst()) {
+            #expect(a.referenceRange.lowerBound <= b.referenceRange.lowerBound)
+            #expect(a.attemptRange.lowerBound <= b.attemptRange.lowerBound)
+        }
+        #expect(result.warnings.contains { $0.contains("different order") })
+    }
+
+    @Test("No shared holds still produces something inspectable")
+    func noAnchorsFailsSoft() {
+        let result = SequenceBuilder().build(
+            route: route(4),
+            referenceAcquisitions: [(0, 0), (50, 1)],
+            attemptAcquisitions: [(0, 2), (50, 3)],
+            referenceFrameCount: 100, attemptFrameCount: 100
+        )
+        #expect(result.sequences.count == 1)
+        #expect(result.anchorDensity == 0)
+        #expect(!result.warnings.isEmpty)
+    }
+
+    @Test("Anchor density reports the fraction of reference hand holds shared")
+    func anchorDensity() {
+        let result = SequenceBuilder().build(
+            route: route(4),
+            referenceAcquisitions: [(0, 0), (50, 1), (100, 2), (150, 3)],
+            attemptAcquisitions: [(0, 0), (80, 2), (160, 3)],
+            referenceFrameCount: 200, attemptFrameCount: 200
+        )
+        #expect(result.anchorIDs == [0, 2, 3])
+        #expect(abs(result.anchorDensity - 0.75) < 1e-9)
+    }
+}
