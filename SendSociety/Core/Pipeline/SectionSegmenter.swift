@@ -108,13 +108,26 @@ public struct SectionSegmenter: Sendable {
             guard let fromHold = route.hold(id: from.holdID),
                   let toHold = route.hold(id: to.holdID) else { continue }
 
-            let refRange = from.frame ..< min(max(to.frame, from.frame + 1), max(referenceFrameCount, from.frame + 1))
+            // **A move ends with the hold taken, not one frame before it.**
+            //
+            // These ranges used to be half-open on the arrival frame, so
+            // scrubbing to 100% of a move showed the last frame *before* the
+            // hand landed, and the latch itself appeared as frame 0 of the next
+            // move. On `gym-testing/test1` that read as the reference having
+            // reached a new hold at the end of move 6 while the attempt had
+            // not — and the attempt's latch then showing up at the start of
+            // move 7.
+            //
+            // Consecutive moves therefore share one frame. That is correct: the
+            // latch is both the end of one move and the start of the next, and
+            // a climber describing the route would say so.
+            let refRange = from.frame ..< min(to.frame + 1, max(referenceFrameCount, from.frame + 1))
 
             var attemptRange = 0 ..< 0
             var divergence: BetaDivergence?
 
             if let aStart = attemptArrival[from.holdID], let aEnd = attemptArrival[to.holdID], aEnd > aStart {
-                attemptRange = aStart ..< min(aEnd, max(attemptEnd, aStart + 1))
+                attemptRange = aStart ..< min(aEnd + 1, max(attemptEnd, aStart + 1))
             } else if let aEnd = attemptArrival[to.holdID], attemptArrival[from.holdID] == nil {
                 // Reached the target without ever using the source hold.
                 divergence = BetaDivergence(
@@ -133,7 +146,7 @@ public struct SectionSegmenter: Sendable {
                 // one, and it reads as a broken player rather than as a
                 // reported beta difference.
                 let aStart = attemptAcquisitions.last { $0.frame < aEnd }?.frame ?? 0
-                attemptRange = aStart ..< max(min(aEnd, attemptEnd), aStart + 1)
+                attemptRange = aStart ..< max(min(aEnd + 1, attemptEnd), aStart + 1)
             } else if let aStart = attemptArrival[from.holdID] {
                 // Reached the source hold but not the target. Two very
                 // different things look identical at this point, and only the
@@ -161,7 +174,7 @@ public struct SectionSegmenter: Sendable {
                     // allowed to hold a different number of moves per climber.
                     var aEnd = attemptEnd
                     for a in attemptAcquisitions where a.frame > aStart {
-                        aEnd = a.frame
+                        aEnd = a.frame + 1
                         break
                     }
                     attemptRange = aStart ..< max(min(aEnd, attemptEnd), aStart + 1)

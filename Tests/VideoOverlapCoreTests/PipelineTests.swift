@@ -242,8 +242,10 @@ struct ContactRouteTests {
         )
         // Three hand acquisitions → two moves. Feet do not create boundaries.
         #expect(result.sections.count == 2)
-        #expect(result.sections[0].referenceRange == 0 ..< 30)
-        #expect(result.sections[0].attemptRange == 10 ..< 40)
+        // Ranges include the arrival frame — a move ends with the hold taken,
+        // so consecutive moves share their boundary frame.
+        #expect(result.sections[0].referenceRange == 0 ..< 31)
+        #expect(result.sections[0].attemptRange == 10 ..< 41)
         #expect(result.sections.allSatisfy { $0.attemptReached })
     }
 
@@ -317,7 +319,7 @@ struct ContactRouteTests {
         #expect(move.divergence?.kind == .skippedHold)
         // Ends at the attempt's next acquisition (frame 80), not at hold 3's
         // arrival (frame 300) and not at the end of the clip.
-        #expect(move.attemptRange == 40 ..< 80)
+        #expect(move.attemptRange == 40 ..< 81)
     }
 
     @Test("Hands used after topping out don't become moves")
@@ -392,7 +394,7 @@ struct ContactRouteTests {
         }
         // The skipped-source move spans the attempt's approach to the target.
         #expect(result.sections[1].divergence?.kind == .skippedHold)
-        #expect(result.sections[1].attemptRange == 0 ..< 60)
+        #expect(result.sections[1].attemptRange == 0 ..< 61)
     }
 
     @Test("A genuinely truncated attempt marks exactly one move")
