@@ -279,7 +279,9 @@ public actor ProcessingPipeline {
         // other, and anchored only on holds both of them actually took.
         let sequenceResult = SequenceBuilder().build(
             route: route,
-            referenceAcquisitions: referenceMatch.handAcquisitions,
+            // The segmenter's trimmed list, not the raw one, so sequence move
+            // indices line up with `sections` exactly.
+            referenceAcquisitions: segmentation.referenceAcquisitions.map { ($0.frame, $0.holdID) },
             attemptAcquisitions: attemptMatch.handAcquisitions,
             referenceFrameCount: referencePose.count,
             attemptFrameCount: attemptPose.count

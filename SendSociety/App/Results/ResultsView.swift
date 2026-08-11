@@ -360,12 +360,13 @@ struct MoveScrubber: View {
                         .overlay {
                             if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) {
                                 Text("F").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
-                            } else if sequence.moveCountDelta != 0 {
-                                // The headline structural difference, visible
-                                // without reading any text.
-                                Text("\(sequence.attemptMoves.count)v\(sequence.referenceMoves.count)")
-                                    .font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
                             }
+                            // A differing move count shows as the orange bar
+                            // and is spelled out in the label above. It was
+                            // also printed into the marker as "1v2", which at
+                            // 7pt inside a 10pt bar, repeated across every
+                            // sequence, was unreadable clutter rather than a
+                            // finding.
                         }
                         .onTapGesture {
                             position = MovePosition(sectionIndex: sequence.index, offset: 0)

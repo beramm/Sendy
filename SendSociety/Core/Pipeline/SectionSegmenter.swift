@@ -3,10 +3,30 @@ import Foundation
 public struct SegmentationResult: Sendable, Codable {
     public var sections: [Section]
     public var warnings: [String]
+    /// The reference hand acquisitions these sections were built from, **after**
+    /// the ground-start and top-out trimming.
+    ///
+    /// Exposed because anything building a parallel structure — the sequence
+    /// layer — has to share this exact list or its move indices silently drift
+    /// out of step with `sections`. Passing the raw acquisitions instead put
+    /// them one apart, so a sequence looked up the wrong move's analysis and
+    /// the last one found none at all.
+    public var referenceAcquisitions: [Acquisition]
 
-    public init(sections: [Section], warnings: [String]) {
+    /// A named pair, because `(frame: Int, holdID: Int)` is not `Codable`.
+    public struct Acquisition: Sendable, Codable, Hashable {
+        public var frame: Int
+        public var holdID: Int
+        public init(frame: Int, holdID: Int) {
+            self.frame = frame
+            self.holdID = holdID
+        }
+    }
+
+    public init(sections: [Section], warnings: [String], referenceAcquisitions: [Acquisition] = []) {
         self.sections = sections
         self.warnings = warnings
+        self.referenceAcquisitions = referenceAcquisitions
     }
 }
 
@@ -331,6 +351,9 @@ public struct SectionSegmenter: Sendable {
         if unreached > 0 {
             warnings.append("\(unreached) of \(sections.count) moves were not reached by the attempt.")
         }
-        return SegmentationResult(sections: sections, warnings: warnings)
+        return SegmentationResult(
+            sections: sections, warnings: warnings,
+            referenceAcquisitions: refAcquisitions.map { .init(frame: $0.frame, holdID: $0.holdID) }
+        )
     }
 }
