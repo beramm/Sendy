@@ -7,18 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		768499233024DB23005A2538 /* capture-protocol.md in Resources */ = {isa = PBXBuildFile; fileRef = 7684991F3024DB23005A2538 /* capture-protocol.md */; };
-		768499243024DB23005A2538 /* tasks.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499223024DB23005A2538 /* tasks.md */; };
-		768499253024DB23005A2538 /* plan.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499213024DB23005A2538 /* plan.md */; };
-		768499263024DB23005A2538 /* claude.md in Resources */ = {isa = PBXBuildFile; fileRef = 768499203024DB23005A2538 /* claude.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		7684990F3024D303005A2538 /* SendSociety.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SendSociety.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7684991F3024DB23005A2538 /* capture-protocol.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "capture-protocol.md"; sourceTree = "<group>"; };
-		768499203024DB23005A2538 /* claude.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = claude.md; sourceTree = "<group>"; };
-		768499213024DB23005A2538 /* plan.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = plan.md; sourceTree = "<group>"; };
-		768499223024DB23005A2538 /* tasks.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = tasks.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -45,10 +37,6 @@
 			children = (
 				768499113024D303005A2538 /* SendSociety */,
 				768499103024D303005A2538 /* Products */,
-				7684991F3024DB23005A2538 /* capture-protocol.md */,
-				768499203024DB23005A2538 /* claude.md */,
-				768499213024DB23005A2538 /* plan.md */,
-				768499223024DB23005A2538 /* tasks.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -122,10 +110,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				768499233024DB23005A2538 /* capture-protocol.md in Resources */,
-				768499243024DB23005A2538 /* tasks.md in Resources */,
-				768499253024DB23005A2538 /* plan.md in Resources */,
-				768499263024DB23005A2538 /* claude.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

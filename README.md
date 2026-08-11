@@ -68,7 +68,7 @@ producing one.
 
 ```
 VideoImporter
- └─ PoseExtractor        Vision or RTMPose → [PoseFrame]
+ └─ PoseExtractor        Apple Vision → [PoseFrame]
     └─ PoseSmoother      1€ filter, per joint
        └─ WallAligner    homography → shared wall space
           └─ ContactDetector    velocity + dwell → [Contact]
@@ -84,7 +84,14 @@ VideoImporter
 
 Each stage is a value type behind a protocol, pure where possible. `PoseExtractor`
 is a protocol specifically so the pose model is a vendor choice rather than a
-project risk.
+project risk — `PoseExtractorFactory.register` lets a model that needs a
+dependency Core cannot link be supplied from the app target instead, and no
+stage downstream knows which model produced the joints it reads.
+
+An RTMPose extractor via ONNX Runtime lived behind that seam for a while and was
+removed. It did track wrists better on the original fixtures, but the
+measurement turned out to be footage-bound rather than tracker-bound — see the
+framing note below — and Vision alone is enough on well-framed clips.
 
 ## Build and test
 
