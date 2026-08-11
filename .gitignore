@@ -1,0 +1,8 @@
+.build/
+.work/
+DerivedData/
+*.xcuserdatad
+Tools/rtmpose/.venv/
+# 218MB pose model — fetch with Tools/rtmpose/fetch-model.sh rather than committing
+SendSociety/Models/*.onnx
+.DS_Store
