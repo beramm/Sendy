@@ -115,6 +115,17 @@ public actor SessionStore {
         return ref
     }
 
+    /// Deletes a video **and every pose file derived from it**. Leaving the
+    /// pose cache behind would orphan a JSON blob per source that nothing can
+    /// ever read again, and the cache is keyed by video id, so a later video
+    /// cannot collide with it either — it would just sit there.
+    public func removeVideo(session: ClimbSession, video: VideoRef) {
+        try? FileManager.default.removeItem(at: videoURL(session: session, video: video))
+        for source in PoseSource.allCases {
+            try? FileManager.default.removeItem(at: poseURL(session: session, video: video, source: source))
+        }
+    }
+
     // MARK: Pose cache (task 1.2c / 4.8)
 
     /// Cached pose for a video, or `nil`. **A results screen must never run

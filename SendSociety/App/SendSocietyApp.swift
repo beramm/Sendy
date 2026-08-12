@@ -21,8 +21,17 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        NavigationStack {
+        @Bindable var model = model
+        NavigationStack(path: $model.path) {
             SessionListView()
+                .navigationDestination(for: AppRoute.self) { route in
+                    switch route {
+                    case .setup: SessionSetupView()
+                    case .results: ResultsView()
+                    case .report: PipelineReportView()
+                    case .tuning: TuningPanelView()
+                    }
+                }
         }
     }
 }

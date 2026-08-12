@@ -143,7 +143,7 @@ struct RouteCorrectionView: View {
         VStack(spacing: 8) {
             GeometryReader { geometry in
                 ZStack {
-                    Rectangle().fill(Color(white: 0.95))
+                    Rectangle().fill(Color(.secondarySystemFill))
                     Canvas { context, size in
                         for hold in holds {
                             let p = CGPoint(x: hold.position.x * size.width, y: (1 - hold.position.y) * size.height)

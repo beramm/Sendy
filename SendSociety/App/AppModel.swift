@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Observation
+import PhotosUI
 
 /// Which of the three comparison views is on screen.
 ///
@@ -29,6 +30,28 @@ enum ProcessingState: Equatable {
     case failed(String)
 }
 
+/// Where a clip slot is in its import. **Per role, not per app** — the two
+/// pickers can be driven at the same time, and a spinner that doesn't say
+/// which clip it belongs to is worse than no spinner.
+enum ClipImportState: Equatable {
+    case idle
+    case loading
+    case failed(String)
+}
+
+/// The screens the main flow can push. Leaf screens (capture, review, route
+/// correction, move list) stay destination-based links — they are one-offs
+/// that nothing ever needs to address by value.
+enum AppRoute: Hashable {
+    case setup
+    case results
+    /// Stage timings, statuses and warnings. **Not in the main flow** — the
+    /// pipeline runs from the clips screen and lands on results. This is the
+    /// debugging surface, reached from results when a number looks wrong.
+    case report
+    case tuning
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -46,6 +69,11 @@ final class AppModel {
     var pipelineRunCount = 0
     var lastError: String?
     var analysisProviderName = "Template"
+    /// Navigation stack for the main flow, so creating a session can land the
+    /// user on the clips screen without them having to find a row.
+    var path: [AppRoute] = []
+    var referenceImport: ClipImportState = .idle
+    var attemptImport: ClipImportState = .idle
     /// Sources with pose already cached for every video, so the picker can say
     /// which switches are instant and which mean re-extracting.
     var cachedPoseSources: Set<PoseSource> = []
@@ -54,6 +82,36 @@ final class AppModel {
 
     init() {
         Task { await refresh() }
+    }
+
+    // MARK: Readiness
+
+    var isImporting: Bool {
+        referenceImport == .loading || attemptImport == .loading
+    }
+
+    /// The submit gate. Both a reference and at least one attempt, and nothing
+    /// still copying out of Photos.
+    var canProcess: Bool {
+        session?.isReadyToProcess == true && !isImporting
+    }
+
+    /// Why the submit button is disabled, in the user's terms. `nil` when it
+    /// isn't — a disabled control with no stated reason is a dead end.
+    var blockedReason: String? {
+        guard let session else { return "Create a session first." }
+        if isImporting { return "Waiting for a clip to finish importing." }
+        if session.reference == nil { return "Add a reference climb — the stronger climber." }
+        if session.attempts.isEmpty { return "Add at least one attempt of your own." }
+        return nil
+    }
+
+    func importState(for role: VideoRef.Role) -> ClipImportState {
+        role == .reference ? referenceImport : attemptImport
+    }
+
+    private func setImportState(_ state: ClipImportState, for role: VideoRef.Role) {
+        if role == .reference { referenceImport = state } else { attemptImport = state }
     }
 
     func refresh() async {
@@ -77,13 +135,19 @@ final class AppModel {
 
     // MARK: Sessions
 
+    /// Creating a session lands on the clips screen. There is nothing to do
+    /// with a session that has no clips, so making the user find a row first
+    /// is a step that only exists to be skipped.
     func newSession(name: String) async {
         do {
             let created = try await store.create(name: name)
             session = created
+            config = created.config
             processed = nil
             state = .idle
             attemptIndex = 0
+            clearImportStates()
+            path = [.setup]
             await refresh()
         } catch {
             lastError = error.localizedDescription
@@ -96,30 +160,113 @@ final class AppModel {
         processed = nil
         state = .idle
         attemptIndex = 0
+        clearImportStates()
+        path = [.setup]
     }
 
     func delete(_ s: ClimbSession) async {
         await store.delete(id: s.id)
-        if session?.id == s.id { session = nil; processed = nil }
+        if session?.id == s.id {
+            session = nil
+            processed = nil
+            state = .idle
+            clearImportStates()
+            path = []
+        }
         await refresh()
     }
 
-    func addVideo(from url: URL, role: VideoRef.Role) async {
-        guard var current = session else { return }
+    private func clearImportStates() {
+        referenceImport = .idle
+        attemptImport = .idle
+    }
+
+    // MARK: Clips
+
+    /// The whole picker-to-disk path, owned by the model so the slot it belongs
+    /// to is known throughout. The view used to hold one shared `importing`
+    /// flag for both pickers, so two concurrent imports cleared each other's
+    /// spinner and a failure surfaced on a screen the user had already left.
+    func importPicked(_ item: PhotosPickerItem, role: VideoRef.Role) async {
+        guard session != nil else { return }
+        setImportState(.loading, for: role)
         do {
-            let label = role == .reference ? "Reference" : "Attempt \(current.attempts.count + 1)"
-            let ref = try await store.importVideo(from: url, into: current, role: role, label: label)
-            if role == .reference {
-                current.reference = ref
-            } else {
-                current.addAttempt(ref)
+            // Copy out of Photos into the session directory: a Photos asset URL
+            // is not stable, and a session that loses its video can never be
+            // reprocessed.
+            guard let movie = try await item.loadTransferable(type: VideoFile.self) else {
+                setImportState(.failed("Could not read that video."), for: role)
+                return
             }
+            defer { try? FileManager.default.removeItem(at: movie.url) }
+            try await persist(movie.url, role: role)
+            setImportState(.idle, for: role)
+        } catch {
+            setImportState(.failed(error.localizedDescription), for: role)
+        }
+    }
+
+    /// Recording path. Same states as the picker path, so the clips screen
+    /// reads the same however the video arrived.
+    func addVideo(from url: URL, role: VideoRef.Role) async {
+        guard session != nil else { return }
+        setImportState(.loading, for: role)
+        do {
+            try await persist(url, role: role)
+            setImportState(.idle, for: role)
+        } catch {
+            setImportState(.failed("Could not import the video: \(error.localizedDescription)"), for: role)
+        }
+    }
+
+    private func persist(_ url: URL, role: VideoRef.Role) async throws {
+        guard var current = session else { return }
+        // Replacing the reference deletes the old file first — overwriting the
+        // ref alone would orphan a video inside the session directory forever.
+        if role == .reference, let existing = current.reference {
+            await store.removeVideo(session: current, video: existing)
+            current.reference = nil
+        }
+        let label = role == .reference ? "Reference" : "Attempt \(current.attempts.count + 1)"
+        let ref = try await store.importVideo(from: url, into: current, role: role, label: label)
+        if role == .reference {
+            current.reference = ref
+        } else {
+            current.addAttempt(ref)
+        }
+        try await store.save(current)
+        session = current
+        invalidateResults()
+        await refresh()
+    }
+
+    /// Removes a clip and everything derived from it. Labels of the surviving
+    /// attempts are deliberately **not** renumbered: a relabelled attempt would
+    /// stop matching whatever a previous processed run reported.
+    func removeVideo(_ ref: VideoRef) async {
+        guard var current = session else { return }
+        await store.removeVideo(session: current, video: ref)
+        if current.reference?.id == ref.id {
+            current.reference = nil
+        } else {
+            current.attempts.removeAll { $0.id == ref.id }
+        }
+        do {
             try await store.save(current)
             session = current
+            attemptIndex = min(attemptIndex, max(0, current.attempts.count - 1))
+            invalidateResults()
             await refresh()
         } catch {
-            lastError = "Could not import the video: \(error.localizedDescription)"
+            lastError = error.localizedDescription
         }
+    }
+
+    /// The clips changed, so anything computed from them is stale.
+    private func invalidateResults() {
+        processed = nil
+        state = .idle
+        path.removeAll { $0 == .results || $0 == .report }
     }
 
     func videoURL(_ ref: VideoRef) async -> URL? {

@@ -79,6 +79,9 @@ struct ResultsView: View {
                 NavigationLink("Raw metrics") { RawMetricsView() }
                 NavigationLink("Route") { RouteCorrectionView() }
                 NavigationLink("Tuning") { TuningPanelView() }
+                // Stage timings, statuses and warnings. The run no longer has a
+                // screen of its own, so this is where it lives.
+                NavigationLink("Report", value: AppRoute.report)
             }
             .buttonStyle(.bordered)
             .font(.footnote)
@@ -477,7 +480,7 @@ struct ClimberPane: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                 } else {
-                    Rectangle().fill(Color(white: 0.9))
+                    Rectangle().fill(Color(.secondarySystemFill))
                         .overlay { Text("no frame").font(.caption2).foregroundStyle(.secondary) }
                 }
                 // No skeleton over video. Two differently-sized bodies with
@@ -528,7 +531,7 @@ struct OverlayPane: View {
             if let attemptImage {
                 Image(decorative: attemptImage, scale: 1).resizable().aspectRatio(contentMode: .fit)
             } else {
-                Rectangle().fill(Color(white: 0.9))
+                Rectangle().fill(Color(.secondarySystemFill))
             }
             if let referenceImage {
                 Image(decorative: referenceImage, scale: 1)

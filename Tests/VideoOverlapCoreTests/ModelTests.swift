@@ -123,4 +123,41 @@ struct TuningConfigCompatibilityTests {
         #expect(decoded?.groundMargin == TuningConfig().groundMargin)
         #expect(decoded?.topOutDropMargin == TuningConfig().topOutDropMargin)
     }
+
+    /// Removing a clip has to take its pose cache with it. The cache is keyed
+    /// by video id and source, so anything left behind is unreachable — a
+    /// silent leak of the largest files the app writes.
+    @Test("Removing a video deletes its pose cache and leaves the other clip alone")
+    func removeVideoClearsPoseCache() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var session = try await store.create(name: "removal")
+        let source = URL.temporaryDirectory.appendingPathComponent("clip-\(UUID().uuidString).mov")
+        try Data("not really a movie".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        let reference = try await store.importVideo(from: source, into: session, role: .reference, label: "Reference")
+        let attempt = try await store.importVideo(from: source, into: session, role: .attempt, label: "Attempt 1")
+        session.reference = reference
+        session.addAttempt(attempt)
+        try await store.save(session)
+
+        let pose = SyntheticClimb.climb(moves: 2)
+        for video in session.allVideos {
+            try await store.cachePose(pose, session: session, video: video, source: .vision)
+        }
+
+        await store.removeVideo(session: session, video: attempt)
+
+        let attemptVideoURL = await store.videoURL(session: session, video: attempt)
+        #expect(!FileManager.default.fileExists(atPath: attemptVideoURL.path))
+        #expect(await store.hasCachedPose(session: session, video: attempt, source: .vision) == false)
+
+        // The reference is untouched.
+        let referenceVideoURL = await store.videoURL(session: session, video: reference)
+        #expect(FileManager.default.fileExists(atPath: referenceVideoURL.path))
+        #expect(await store.hasCachedPose(session: session, video: reference, source: .vision) == true)
+    }
 }
