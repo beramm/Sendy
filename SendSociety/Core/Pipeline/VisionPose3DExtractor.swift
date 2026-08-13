@@ -172,7 +172,7 @@ private enum VisionPoseExtractionLoop {
                 frames2D.append(PoseFrame(index: emittedIndex, timeSeconds: pts, joints: joints2D))
             }
 
-            var joints3D: [JointName: Joint3D] = [:]
+            var joints3D: [JointName3D: Joint3D] = [:]
             do {
                 // Separate performs preserve the usable 2D result if the 3D
                 // stateful request fails, while still sharing this exact source
@@ -257,8 +257,8 @@ private enum VisionPoseExtractionLoop {
         return output
     }
 
-    static func joints(from observation: HumanBodyPose3DObservation) -> [JointName: Joint3D] {
-        var output: [JointName: Joint3D] = [:]
+    static func joints(from observation: HumanBodyPose3DObservation) -> [JointName3D: Joint3D] {
+        var output: [JointName3D: Joint3D] = [:]
         for (visionName, appName) in pose3DJointMap {
             guard observation.joint(for: visionName) != nil else { continue }
             let transform = observation.cameraRelativePosition(for: visionName)
@@ -299,15 +299,18 @@ private enum VisionPoseExtractionLoop {
         .root: .root
     ]
 
-    /// Only exact semantic matches. Vision 3D's centerHead/topHead/spine and
-    /// centerShoulder are intentionally not renamed to the 2D neck/nose model.
-    static let pose3DJointMap: [HumanBodyPose3DObservation.JointName: JointName] = [
+    /// All 17 joints in the installed Vision 3D body topology. They map to the
+    /// parallel 3D name type rather than being approximated as analytical 2D
+    /// joints with different semantics.
+    static let pose3DJointMap: [HumanBodyPose3DObservation.JointName: JointName3D] = [
+        .topHead: .topHead, .centerHead: .centerHead,
+        .centerShoulder: .centerShoulder,
         .leftShoulder: .leftShoulder, .rightShoulder: .rightShoulder,
         .leftElbow: .leftElbow, .rightElbow: .rightElbow,
         .leftWrist: .leftWrist, .rightWrist: .rightWrist,
+        .spine: .spine, .root: .root,
         .leftHip: .leftHip, .rightHip: .rightHip,
         .leftKnee: .leftKnee, .rightKnee: .rightKnee,
-        .leftAnkle: .leftAnkle, .rightAnkle: .rightAnkle,
-        .root: .root
+        .leftAnkle: .leftAnkle, .rightAnkle: .rightAnkle
     ]
 }

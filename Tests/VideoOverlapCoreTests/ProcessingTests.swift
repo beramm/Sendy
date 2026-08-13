@@ -75,7 +75,7 @@ struct ProcessingTests {
     func pose3D(from pose: PoseSequence, emptyAt emptyIndex: Int? = nil) -> PoseSequence3D {
         PoseSequence3D(
             frames: pose.frames.map { frame in
-                let joints: [JointName: Joint3D] = frame.index == emptyIndex
+                let joints: [JointName3D: Joint3D] = frame.index == emptyIndex
                     ? [:]
                     : [.root: Joint3D(point: Point3D(x: 0, y: 0, z: -2), confidence: 0.9)]
                 return PoseFrame3D(index: frame.index, timeSeconds: frame.timeSeconds, joints: joints)
@@ -224,6 +224,40 @@ struct ProcessingTests {
         #expect(result.pose3D == nil)
         #expect(result.warnings.contains { $0.contains("analytical 2D results remain valid") })
         #expect(failed3D.calls == 1)
+    }
+
+    @Test("A version 1 3D cache regenerates 3D without rerunning cached 2D")
+    func stale3DCacheRunsOnly3D() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = try await makeSession(store: store)
+        let video = try #require(session.reference)
+        let pose = SyntheticClimb.climb(moves: 2)
+        let current3D = pose3D(from: pose)
+        var stale3D = current3D
+        stale3D.schemaVersion = 1
+        try await store.cachePose(pose, session: session, video: video, source: .vision)
+        try await store.cachePose3D(stale3D, session: session, video: video)
+
+        let poseSpy = SpyExtractor(reference: pose, attempt: pose)
+        let pose3DSpy = SpyPose3DExtractor(sequence: current3D)
+        let combinedSpy = SpyCombinedPoseExtractor(bundle: PoseExtractionBundle(pose: pose, pose3D: current3D))
+        let pipeline = ProcessingPipeline(
+            store: store,
+            extractor: poseSpy,
+            pose3DExtractor: pose3DSpy,
+            combinedPoseExtractor: combinedSpy
+        )
+
+        let result = try await pipeline.poseData(
+            for: video, session: session, config: TuningConfig(), progress: { _ in }
+        )
+        #expect(result.poseFromCache)
+        #expect(result.pose3D?.schemaVersion == PoseSequence3D.currentSchemaVersion)
+        #expect(poseSpy.calls == 0)
+        #expect(pose3DSpy.calls == 1)
+        #expect(combinedSpy.calls == 0)
     }
 
     @Test("A complete analytical run succeeds when 3D extraction fails")

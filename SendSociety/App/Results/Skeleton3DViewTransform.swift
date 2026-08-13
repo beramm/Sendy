@@ -9,6 +9,12 @@ struct Skeleton3DViewTransform: Equatable {
     var translation = SIMD3<Float>.zero
 
     static let identity = Skeleton3DViewTransform()
+
+    /// Vision reports the body in camera-relative coordinates, while the
+    /// RealityKit virtual camera observes the model from the opposite side of
+    /// its local depth axis. Half a turn restores the viewpoint seen in the
+    /// source video (for example, a filmed back opens as a back view).
+    static let videoAligned = Skeleton3DViewTransform(yaw: .pi)
 }
 
 enum Skeleton3DDragMode: String, CaseIterable, Identifiable {
