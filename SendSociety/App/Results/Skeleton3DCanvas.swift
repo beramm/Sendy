@@ -74,37 +74,57 @@ struct Skeleton3DCanvas: View {
 private final class Skeleton3DSceneController {
     let root = Entity()
     private let skeleton = Entity()
-    private var jointEntities: [JointName: ModelEntity] = [:]
-    private var boneEntities: [BoneKey: ModelEntity] = [:]
+    private let headEntity: ModelEntity
+    private var jointEntities: [JointName3D: ModelEntity] = [:]
+    private var segmentEntities: [Skeleton3DSegmentDefinition: ModelEntity] = [:]
 
     init() {
+        let bodyMaterial = SimpleMaterial(color: .systemMint, roughness: 0.58, isMetallic: false)
+        headEntity = ModelEntity(
+            mesh: .generateSphere(radius: 1),
+            materials: [bodyMaterial]
+        )
+        headEntity.isEnabled = false
         root.addChild(skeleton)
-        buildEntities()
+        skeleton.addChild(headEntity)
+        buildEntities(bodyMaterial: bodyMaterial)
     }
 
     func update(frame: PoseFrame3D?, viewTransform: Skeleton3DViewTransform) {
         apply(viewTransform)
         guard let frame, !frame.joints.isEmpty else {
+            headEntity.isEnabled = false
             jointEntities.values.forEach { $0.isEnabled = false }
-            boneEntities.values.forEach { $0.isEnabled = false }
+            segmentEntities.values.forEach { $0.isEnabled = false }
             return
         }
 
         let origin = bodyOrigin(frame)
-        var displayPoints: [JointName: SIMD3<Float>] = [:]
+        let displayPoints = frame.joints.mapValues {
+            SIMD3($0.point.x, $0.point.y, $0.point.z) - origin
+        }
+        let bodyScale = Skeleton3DGeometry.bodyScale(points: displayPoints)
+
+        if let head = Skeleton3DGeometry.headTransform(points: displayPoints, bodyScale: bodyScale) {
+            headEntity.position = head.position
+            headEntity.scale = head.scale
+            headEntity.isEnabled = true
+        } else {
+            headEntity.isEnabled = false
+        }
+
         for (name, entity) in jointEntities {
-            guard let joint = frame.joints[name] else {
+            guard let point = displayPoints[name] else {
                 entity.isEnabled = false
                 continue
             }
-            let point = SIMD3(joint.point.x, joint.point.y, joint.point.z) - origin
-            displayPoints[name] = point
             entity.position = point
+            entity.scale = Skeleton3DGeometry.jointScale(name, bodyScale: bodyScale)
             entity.isEnabled = true
         }
 
-        for (key, entity) in boneEntities {
-            guard let start = displayPoints[key.start], let end = displayPoints[key.end] else {
+        for (segment, entity) in segmentEntities {
+            guard let start = displayPoints[segment.start], let end = displayPoints[segment.end] else {
                 entity.isEnabled = false
                 continue
             }
@@ -115,29 +135,33 @@ private final class Skeleton3DSceneController {
                 continue
             }
             entity.position = (start + end) * 0.5
-            entity.scale = SIMD3(1, length, 1)
+            let radii = Skeleton3DGeometry.segmentRadii(
+                segment.style,
+                bodyScale: bodyScale,
+                points: displayPoints
+            )
+            entity.scale = SIMD3(radii.x, length, radii.y)
             entity.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: delta / length)
             entity.isEnabled = true
         }
     }
 
-    private func buildEntities() {
-        let material = SimpleMaterial(color: .systemTeal, roughness: 0.65, isMetallic: false)
-        let jointMesh = MeshResource.generateSphere(radius: 0.035)
-        for name in JointName.allCases {
-            let entity = ModelEntity(mesh: jointMesh, materials: [material])
+    private func buildEntities(bodyMaterial: SimpleMaterial) {
+        let jointMaterial = SimpleMaterial(color: .white, roughness: 0.48, isMetallic: false)
+        let jointMesh = MeshResource.generateSphere(radius: 1)
+        for name in JointName3D.allCases where name != .topHead && name != .centerHead {
+            let entity = ModelEntity(mesh: jointMesh, materials: [jointMaterial])
             entity.isEnabled = false
             skeleton.addChild(entity)
             jointEntities[name] = entity
         }
 
-        let boneMesh = MeshResource.generateCylinder(height: 1, radius: 0.018)
-        for (start, end) in skeletonBones {
-            let key = BoneKey(start: start, end: end)
-            let entity = ModelEntity(mesh: boneMesh, materials: [material])
+        let segmentMesh = MeshResource.generateCylinder(height: 1, radius: 1)
+        for segment in mannequinSegments3D {
+            let entity = ModelEntity(mesh: segmentMesh, materials: [bodyMaterial])
             entity.isEnabled = false
             skeleton.addChild(entity)
-            boneEntities[key] = entity
+            segmentEntities[segment] = entity
         }
     }
 
@@ -162,9 +186,4 @@ private final class Skeleton3DSceneController {
         }
         return .zero
     }
-}
-
-private struct BoneKey: Hashable {
-    var start: JointName
-    var end: JointName
 }

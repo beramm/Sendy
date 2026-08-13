@@ -49,6 +49,14 @@ struct ModelTests {
         #expect(decoded.frame(at: 1)?.index == 1)
         #expect(decoded.frame(at: 1)?.joints.isEmpty == true)
         #expect(decoded.warnings == sequence.warnings)
+        #expect(decoded.schemaVersion == PoseSequence3D.currentSchemaVersion)
+    }
+
+    @Test("Vision 3D topology contains and connects all 17 supported joints")
+    func completePose3DTopology() {
+        #expect(JointName3D.allCases.count == 17)
+        let connected = Set(skeleton3DBones.flatMap { [$0.0, $0.1] })
+        #expect(connected == Set(JointName3D.allCases))
     }
 
     @Test("Contact, Hold, Route and Section round-trip")
@@ -189,5 +197,39 @@ struct TuningConfigCompatibilityTests {
         #expect(FileManager.default.fileExists(atPath: referenceVideoURL.path))
         #expect(await store.hasCachedPose(session: session, video: reference, source: .vision) == true)
         #expect(await store.hasCachedPose3D(session: session, video: reference) == true)
+    }
+
+    @Test("A limb-only version 1 cache is stale but remains decodable")
+    func oldPose3DCacheIsRejected() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var session = try await store.create(name: "old-3d-cache")
+        let video = VideoRef(filename: "ref.mov", role: .reference, label: "Reference")
+        session.reference = video
+
+        let sequence = PoseSequence3D(
+            frames: [PoseFrame3D(
+                index: 0,
+                timeSeconds: 0,
+                joints: [.root: Joint3D(point: Point3D(x: 0, y: 0, z: 0), confidence: 1)]
+            )],
+            frameRate: 15,
+            sourceWidth: 1080,
+            sourceHeight: 1920
+        )
+        let encoded = try JSONEncoder().encode(sequence)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "schemaVersion")
+        let oldData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(PoseSequence3D.self, from: oldData)
+        #expect(decoded.schemaVersion == 1)
+
+        let cacheURL = await store.pose3DURL(session: session, video: video)
+        try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try oldData.write(to: cacheURL)
+        #expect(await store.cachedPose3D(session: session, video: video) == nil)
+        #expect(await store.hasCachedPose3D(session: session, video: video) == false)
     }
 }

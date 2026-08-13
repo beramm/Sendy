@@ -6,9 +6,9 @@ struct Skeleton3DComparisonView: View {
 
     @State private var viewLocked = true
     @State private var dragMode: Skeleton3DDragMode = .rotate
-    @State private var sharedTransform = Skeleton3DViewTransform.identity
-    @State private var referenceTransform = Skeleton3DViewTransform.identity
-    @State private var attemptTransform = Skeleton3DViewTransform.identity
+    @State private var sharedTransform = Skeleton3DViewTransform.videoAligned
+    @State private var referenceTransform = Skeleton3DViewTransform.videoAligned
+    @State private var attemptTransform = Skeleton3DViewTransform.videoAligned
 
     var body: some View {
         VStack(spacing: 6) {
@@ -82,10 +82,10 @@ struct Skeleton3DComparisonView: View {
 
     private func resetView() {
         if viewLocked {
-            sharedTransform = .identity
+            sharedTransform = .videoAligned
         } else {
-            referenceTransform = .identity
-            attemptTransform = .identity
+            referenceTransform = .videoAligned
+            attemptTransform = .videoAligned
         }
     }
 }

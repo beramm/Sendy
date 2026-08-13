@@ -160,7 +160,11 @@ public actor SessionStore {
     public func cachedPose3D(session: ClimbSession, video: VideoRef) -> PoseSequence3D? {
         let url = pose3DURL(session: session, video: video)
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(PoseSequence3D.self, from: data)
+        guard let sequence = try? JSONDecoder().decode(PoseSequence3D.self, from: data),
+              sequence.schemaVersion == PoseSequence3D.currentSchemaVersion else {
+            return nil
+        }
+        return sequence
     }
 
     public func cachePose3D(_ sequence: PoseSequence3D, session: ClimbSession, video: VideoRef) throws {
@@ -171,7 +175,7 @@ public actor SessionStore {
     }
 
     public func hasCachedPose3D(session: ClimbSession, video: VideoRef) -> Bool {
-        FileManager.default.fileExists(atPath: pose3DURL(session: session, video: video).path)
+        cachedPose3D(session: session, video: video) != nil
     }
 
     /// Which sources already have pose cached for every video in a session, so
