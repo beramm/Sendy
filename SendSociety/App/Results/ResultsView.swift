@@ -126,6 +126,11 @@ struct ResultsView: View {
                 route: processed.route,
                 overlays: overlays
             )
+        case .skeleton3D:
+            Skeleton3DComparisonView(
+                referenceFrame: processed.referencePose3D?.frame(at: frames.reference),
+                attemptFrame: frames.attempt.flatMap { processed.attemptPose3D?.frame(at: $0) }
+            )
         case .sideBySide:
             HStack(spacing: 4) {
                 ClimberPane(

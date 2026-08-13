@@ -3,14 +3,15 @@ import SwiftUI
 import Observation
 import PhotosUI
 
-/// Which of the three comparison views is on screen.
+/// Which comparison view is on screen.
 ///
 /// **View-layer only.** Switching modes must not re-run a single pipeline
-/// stage — everything all three modes need is already in `ProcessedSession`.
+/// stage — everything every mode needs is already in `ProcessedSession`.
 enum ComparisonMode: String, CaseIterable, Identifiable {
     case sideBySide
     case overlay
     case skeletonOnly
+    case skeleton3D
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
         case .sideBySide: "Side by side"
         case .overlay: "Overlay"
         case .skeletonOnly: "Skeleton"
+        case .skeleton3D: "Skeleton 3D"
         }
     }
 }
