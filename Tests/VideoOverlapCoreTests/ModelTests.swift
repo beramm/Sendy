@@ -30,6 +30,27 @@ struct ModelTests {
         #expect(back.space == .wall)
     }
 
+    @Test("PoseSequence3D round-trips and keeps empty synchronized frames")
+    func poseSequence3DRoundTrip() throws {
+        let sequence = PoseSequence3D(
+            frames: [
+                PoseFrame3D(
+                    index: 0, timeSeconds: 0,
+                    joints: [.root: Joint3D(point: Point3D(x: 0, y: 0, z: -2), confidence: 0.9)]
+                ),
+                PoseFrame3D(index: 1, timeSeconds: 1.0 / 15.0, joints: [:])
+            ],
+            frameRate: 15, sourceWidth: 1080, sourceHeight: 1920,
+            warnings: ["one missed detection"]
+        )
+        let data = try JSONEncoder().encode(sequence)
+        let decoded = try JSONDecoder().decode(PoseSequence3D.self, from: data)
+        #expect(decoded.count == 2)
+        #expect(decoded.frame(at: 1)?.index == 1)
+        #expect(decoded.frame(at: 1)?.joints.isEmpty == true)
+        #expect(decoded.warnings == sequence.warnings)
+    }
+
     @Test("Contact, Hold, Route and Section round-trip")
     func pipelineTypesRoundTrip() throws {
         let contact = Contact(joint: .leftWrist, startFrame: 3, endFrame: 20, position: Point2D(x: 0.4, y: 0.5), confidence: 0.7)
@@ -145,8 +166,15 @@ struct TuningConfigCompatibilityTests {
         try await store.save(session)
 
         let pose = SyntheticClimb.climb(moves: 2)
+        let pose3D = PoseSequence3D(
+            frames: pose.frames.map { PoseFrame3D(index: $0.index, timeSeconds: $0.timeSeconds, joints: [:]) },
+            frameRate: pose.frameRate,
+            sourceWidth: pose.sourceWidth,
+            sourceHeight: pose.sourceHeight
+        )
         for video in session.allVideos {
             try await store.cachePose(pose, session: session, video: video, source: .vision)
+            try await store.cachePose3D(pose3D, session: session, video: video)
         }
 
         await store.removeVideo(session: session, video: attempt)
@@ -154,10 +182,12 @@ struct TuningConfigCompatibilityTests {
         let attemptVideoURL = await store.videoURL(session: session, video: attempt)
         #expect(!FileManager.default.fileExists(atPath: attemptVideoURL.path))
         #expect(await store.hasCachedPose(session: session, video: attempt, source: .vision) == false)
+        #expect(await store.hasCachedPose3D(session: session, video: attempt) == false)
 
         // The reference is untouched.
         let referenceVideoURL = await store.videoURL(session: session, video: reference)
         #expect(FileManager.default.fileExists(atPath: referenceVideoURL.path))
         #expect(await store.hasCachedPose(session: session, video: reference, source: .vision) == true)
+        #expect(await store.hasCachedPose3D(session: session, video: reference) == true)
     }
 }

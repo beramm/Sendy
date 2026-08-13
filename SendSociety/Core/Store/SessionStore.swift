@@ -7,6 +7,7 @@ import Foundation
 ///   session.json
 ///   videos/<video-uuid>.mov
 ///   poses/<video-uuid>.json      ← the pose cache
+///   poses3d/<video-uuid>.json    ← visualization-only 3D pose cache
 /// ```
 ///
 /// Sessions are one-off — there is no library and no cross-session
@@ -62,6 +63,11 @@ public actor SessionStore {
             .appendingPathComponent("\(video.id.uuidString)-\(source.rawValue).json")
     }
 
+    public func pose3DURL(session: ClimbSession, video: VideoRef) -> URL {
+        directory(for: session.id).appendingPathComponent("poses3d", isDirectory: true)
+            .appendingPathComponent("\(video.id.uuidString).json")
+    }
+
     // MARK: Sessions
 
     public func create(name: String) throws -> ClimbSession {
@@ -69,6 +75,7 @@ public actor SessionStore {
         let dir = directory(for: session.id)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("videos"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("poses"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("poses3d"), withIntermediateDirectories: true)
         try save(session)
         return session
     }
@@ -124,6 +131,7 @@ public actor SessionStore {
         for source in PoseSource.allCases {
             try? FileManager.default.removeItem(at: poseURL(session: session, video: video, source: source))
         }
+        try? FileManager.default.removeItem(at: pose3DURL(session: session, video: video))
     }
 
     // MARK: Pose cache (task 1.2c / 4.8)
@@ -145,6 +153,25 @@ public actor SessionStore {
 
     public func hasCachedPose(session: ClimbSession, video: VideoRef, source: PoseSource) -> Bool {
         FileManager.default.fileExists(atPath: poseURL(session: session, video: video, source: source).path)
+    }
+
+    // MARK: 3D pose cache
+
+    public func cachedPose3D(session: ClimbSession, video: VideoRef) -> PoseSequence3D? {
+        let url = pose3DURL(session: session, video: video)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PoseSequence3D.self, from: data)
+    }
+
+    public func cachePose3D(_ sequence: PoseSequence3D, session: ClimbSession, video: VideoRef) throws {
+        let url = pose3DURL(session: session, video: video)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(sequence)
+        try data.write(to: url, options: .atomic)
+    }
+
+    public func hasCachedPose3D(session: ClimbSession, video: VideoRef) -> Bool {
+        FileManager.default.fileExists(atPath: pose3DURL(session: session, video: video).path)
     }
 
     /// Which sources already have pose cached for every video in a session, so
