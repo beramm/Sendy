@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// Working name only. Not final — never hardcode it in user-facing strings.
+/// Must stay in step with `INFOPLIST_KEY_CFBundleDisplayName`, which is what
+/// the home screen shows; this is the name used inside the app.
 enum AppNaming {
-    static let displayName = String(localized: "Video Overlap", comment: "Working name of the app")
+    static let displayName = String(localized: "Sendyy", comment: "Working name of the app")
 }
 
 @main
