@@ -30,6 +30,7 @@ struct RootView: View {
                     case .results: ResultsView()
                     case .report: PipelineReportView()
                     case .tuning: TuningPanelView()
+                    case .armPositionCollage: ArmPositionCollageView()  // added for collage
                     }
                 }
         }

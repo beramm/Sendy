@@ -52,6 +52,7 @@ enum AppRoute: Hashable {
     /// debugging surface, reached from results when a number looks wrong.
     case report
     case tuning
+    case armPositionCollage // added for collage
 }
 
 @MainActor

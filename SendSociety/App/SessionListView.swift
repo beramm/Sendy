@@ -152,7 +152,19 @@ struct SessionSetupView: View {
             } footer: {
                 Text("Your own climbs. Swipe an attempt to remove it.")
             }
-
+            
+            
+            //added for collage
+            if model.session?.reference != nil, !(model.session?.attempts.isEmpty ?? true) {
+                            SwiftUI.Section {
+                                NavigationLink("Compare arm positions", value: AppRoute.armPositionCollage)
+                            } footer: {
+                                Text("Frame-by-frame arm position comparison — no processing run needed.")
+                            }
+                        }
+            //added for collage
+            
+            
             SwiftUI.Section {
                 DisclosureGroup("Capture protocol") {
                     Text("""
