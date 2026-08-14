@@ -57,25 +57,25 @@ enum Skeleton3DGeometry {
     ) -> SIMD2<Float> {
         switch style {
         case .neck:
-            return SIMD2(repeating: bodyScale * 0.12)
+            return SIMD2(repeating: bodyScale * 0.19)
         case .shoulder:
-            return SIMD2(repeating: bodyScale * 0.14)
+            return SIMD2(repeating: bodyScale * 0.24)
         case .upperArm:
-            return SIMD2(repeating: bodyScale * 0.145)
+            return SIMD2(bodyScale * 0.28, bodyScale * 0.25)
         case .forearm:
-            return SIMD2(repeating: bodyScale * 0.125)
+            return SIMD2(bodyScale * 0.24, bodyScale * 0.22)
         case .upperTorso:
             let shoulderWidth = distance(.leftShoulder, .rightShoulder, points: points) ?? bodyScale
-            return SIMD2(max(bodyScale * 0.25, shoulderWidth * 0.34), bodyScale * 0.24)
+            return SIMD2(max(bodyScale * 0.49, shoulderWidth * 0.54), bodyScale * 0.43)
         case .lowerTorso:
             let hipWidth = distance(.leftHip, .rightHip, points: points) ?? bodyScale * 0.75
-            return SIMD2(max(bodyScale * 0.22, hipWidth * 0.36), bodyScale * 0.22)
+            return SIMD2(max(bodyScale * 0.43, hipWidth * 0.55), bodyScale * 0.39)
         case .pelvis:
-            return SIMD2(bodyScale * 0.17, bodyScale * 0.20)
+            return SIMD2(bodyScale * 0.31, bodyScale * 0.35)
         case .thigh:
-            return SIMD2(repeating: bodyScale * 0.18)
+            return SIMD2(bodyScale * 0.32, bodyScale * 0.29)
         case .lowerLeg:
-            return SIMD2(repeating: bodyScale * 0.15)
+            return SIMD2(bodyScale * 0.27, bodyScale * 0.245)
         }
     }
 
@@ -83,13 +83,13 @@ enum Skeleton3DGeometry {
         let radius: Float
         switch name {
         case .leftWrist, .rightWrist:
-            radius = bodyScale * 0.18
-        case .leftAnkle, .rightAnkle:
-            radius = bodyScale * 0.19
-        case .leftShoulder, .rightShoulder, .leftHip, .rightHip:
             radius = bodyScale * 0.16
+        case .leftAnkle, .rightAnkle:
+            radius = bodyScale * 0.17
+        case .leftShoulder, .rightShoulder, .leftHip, .rightHip:
+            radius = bodyScale * 0.15
         case .leftElbow, .rightElbow, .leftKnee, .rightKnee:
-            radius = bodyScale * 0.145
+            radius = bodyScale * 0.135
         case .centerShoulder, .spine, .root:
             radius = bodyScale * 0.14
         case .topHead, .centerHead:
@@ -106,11 +106,11 @@ enum Skeleton3DGeometry {
 
     static func headTransform(points: [JointName3D: SIMD3<Float>], bodyScale: Float) -> (position: SIMD3<Float>, scale: SIMD3<Float>)? {
         guard let center = points[.centerHead] else { return nil }
-        let halfHeight = points[.topHead].map { max(simd_distance($0, center) * 1.05, bodyScale * 0.20) }
-            ?? bodyScale * 0.23
+        let halfHeight = points[.topHead].map { max(simd_distance($0, center) * 1.15, bodyScale * 0.25) }
+            ?? bodyScale * 0.28
         return (
             center,
-            SIMD3(halfHeight * 0.82, halfHeight, halfHeight * 0.88)
+            SIMD3(halfHeight * 0.88, halfHeight, halfHeight * 0.93)
         )
     }
 

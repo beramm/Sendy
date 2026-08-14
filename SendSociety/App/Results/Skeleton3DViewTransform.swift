@@ -14,7 +14,7 @@ struct Skeleton3DViewTransform: Equatable {
     /// RealityKit virtual camera observes the model from the opposite side of
     /// its local depth axis. Half a turn restores the viewpoint seen in the
     /// source video (for example, a filmed back opens as a back view).
-    static let videoAligned = Skeleton3DViewTransform(yaw: .pi)
+    static let videoAligned = Skeleton3DViewTransform(yaw: .pi, zoom: 2.5)
 }
 
 enum Skeleton3DDragMode: String, CaseIterable, Identifiable {

@@ -72,11 +72,37 @@ struct Skeleton3DCanvas: View {
 
 @MainActor
 private final class Skeleton3DSceneController {
+    @MainActor
+    private struct CapsuleEntities {
+        let root: Entity
+        let tube: ModelEntity
+        let startCap: ModelEntity
+        let endCap: ModelEntity
+
+        var isEnabled: Bool {
+            get { root.isEnabled }
+            nonmutating set { root.isEnabled = newValue }
+        }
+
+        func update(length: Float, radii: SIMD2<Float>) {
+            // Keep a visible cylindrical middle even when a torso segment is
+            // shorter than its width. The caps flatten only along the segment
+            // axis; their x/z radii still match the tube exactly.
+            let capHeight = min((radii.x + radii.y) * 0.5, length * 0.28)
+            let tubeLength = max(length - capHeight * 2, length * 0.22)
+            tube.scale = SIMD3(radii.x, tubeLength, radii.y)
+            startCap.scale = SIMD3(radii.x, capHeight, radii.y)
+            endCap.scale = SIMD3(radii.x, capHeight, radii.y)
+            startCap.position = SIMD3(0, -tubeLength * 0.5, 0)
+            endCap.position = SIMD3(0, tubeLength * 0.5, 0)
+        }
+    }
+
     let root = Entity()
     private let skeleton = Entity()
     private let headEntity: ModelEntity
     private var jointEntities: [JointName3D: ModelEntity] = [:]
-    private var segmentEntities: [Skeleton3DSegmentDefinition: ModelEntity] = [:]
+    private var segmentEntities: [Skeleton3DSegmentDefinition: CapsuleEntities] = [:]
 
     init() {
         let bodyMaterial = SimpleMaterial(color: .systemMint, roughness: 0.58, isMetallic: false)
@@ -134,14 +160,14 @@ private final class Skeleton3DSceneController {
                 entity.isEnabled = false
                 continue
             }
-            entity.position = (start + end) * 0.5
+            entity.root.position = (start + end) * 0.5
             let radii = Skeleton3DGeometry.segmentRadii(
                 segment.style,
                 bodyScale: bodyScale,
                 points: displayPoints
             )
-            entity.scale = SIMD3(radii.x, length, radii.y)
-            entity.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: delta / length)
+            entity.update(length: length, radii: radii)
+            entity.root.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: delta / length)
             entity.isEnabled = true
         }
     }
@@ -156,12 +182,24 @@ private final class Skeleton3DSceneController {
             jointEntities[name] = entity
         }
 
-        let segmentMesh = MeshResource.generateCylinder(height: 1, radius: 1)
+        let tubeMesh = MeshResource.generateCylinder(height: 1, radius: 1)
+        let capMesh = MeshResource.generateSphere(radius: 1)
         for segment in mannequinSegments3D {
-            let entity = ModelEntity(mesh: segmentMesh, materials: [bodyMaterial])
-            entity.isEnabled = false
-            skeleton.addChild(entity)
-            segmentEntities[segment] = entity
+            let capsuleRoot = Entity()
+            let tube = ModelEntity(mesh: tubeMesh, materials: [bodyMaterial])
+            let startCap = ModelEntity(mesh: capMesh, materials: [bodyMaterial])
+            let endCap = ModelEntity(mesh: capMesh, materials: [bodyMaterial])
+            capsuleRoot.addChild(tube)
+            capsuleRoot.addChild(startCap)
+            capsuleRoot.addChild(endCap)
+            capsuleRoot.isEnabled = false
+            skeleton.addChild(capsuleRoot)
+            segmentEntities[segment] = CapsuleEntities(
+                root: capsuleRoot,
+                tube: tube,
+                startCap: startCap,
+                endCap: endCap
+            )
         }
     }
 
