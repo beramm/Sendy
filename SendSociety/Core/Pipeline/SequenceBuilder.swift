@@ -14,7 +14,8 @@ public struct SequenceBuilder: Sendable {
         referenceAcquisitions: [(frame: Int, holdID: Int)],
         attemptAcquisitions: [(frame: Int, holdID: Int)],
         referenceFrameCount: Int,
-        attemptFrameCount: Int
+        attemptFrameCount: Int,
+        config: TuningConfig = TuningConfig()
     ) -> SequenceResult {
         var warnings: [String] = []
 
@@ -100,6 +101,40 @@ public struct SequenceBuilder: Sendable {
                 attemptMoves: moveRange(in: attemptBeta, from: fromID, to: toID)
             ))
         }
+        // **The tail of the climb is a sequence too.**
+        //
+        // Anchored sequences stop at the last hold both climbers took, and on a
+        // go that ends in a fall that is nowhere near the end of the footage —
+        // the attempt hangs on, tries the next move, and comes off, all after
+        // the last anchor. With no sequence covering it, the scrubber cannot
+        // reach the one span the climber most wants to watch.
+        //
+        // It is deliberately open at the far end: `toAnchorID` is -1, there is
+        // no second anchor, and nothing here is compared across climbers. It
+        // exists to be watched, and a fall report to be pinned to.
+        if let lastAnchor = anchorIDs.last,
+           let refStart = referenceArrival[lastAnchor], let attStart = attemptArrival[lastAnchor] {
+            let refTail = refStart ..< referenceFrameCount
+            let attTail = attStart ..< attemptFrameCount
+            let longest = max(refTail.count, attTail.count)
+            let alreadyCovered = sequences.last.map { max($0.referenceRange.upperBound, 0) } ?? 0
+            if longest > config.terminalSequenceMinFrames, alreadyCovered < referenceFrameCount || attTail.count > config.terminalSequenceMinFrames {
+                sequences.append(ClimbSequence(
+                    index: sequences.count,
+                    fromAnchorID: lastAnchor,
+                    toAnchorID: -1,
+                    referenceRange: refTail,
+                    attemptRange: attTail,
+                    referenceMoves: movesAfter(lastAnchor, in: referenceBeta),
+                    attemptMoves: movesAfter(lastAnchor, in: attemptBeta)
+                ))
+                warnings.append(
+                    "The footage after hold \(lastAnchor) — the last hold both climbers used — is shown as a final "
+                    + "sequence so the end of the go can be watched. It is anchored at one end only, so nothing in it is compared."
+                )
+            }
+        }
+
         return SequenceResult(
             sequences: sequences, referenceBeta: referenceBeta, attemptBeta: attemptBeta,
             anchorIDs: anchorIDs, anchorDensity: density, warnings: warnings
@@ -107,6 +142,14 @@ public struct SequenceBuilder: Sendable {
     }
 
     // MARK: - Pieces
+
+    /// A climber's own moves from the given hold to the end of their climb.
+    func movesAfter(_ hold: Int, in beta: Beta) -> Range<Int> {
+        guard let start = beta.moves.firstIndex(where: { $0.fromHoldID == hold }) else {
+            return beta.moves.count ..< beta.moves.count
+        }
+        return start ..< beta.moves.count
+    }
 
     func beta(from acquisitions: [(frame: Int, holdID: Int)], frameCount: Int) -> Beta {
         guard acquisitions.count >= 2 else { return Beta(moves: []) }

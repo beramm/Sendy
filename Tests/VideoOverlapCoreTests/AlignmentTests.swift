@@ -171,6 +171,25 @@ struct WallAlignerTests {
         let moved = warped.frames[10].joints[.leftWrist]!.point
         #expect(moved.distance(to: h.apply(to: original)) < 1e-9)
     }
+
+    /// Skeleton-overlay mode draws the attempt's pose on the attempt's own,
+    /// unwarped footage. The pose is in wall space, so it has to go back
+    /// through the inverse first — and getting that direction wrong puts the
+    /// skeleton beside the climber, which looks exactly like a tracking
+    /// failure that isn't there. This pins the direction.
+    @Test("The inverse homography returns a wall-space pose to its own video")
+    func inverseReturnsPoseToItsOwnFrame() throws {
+        let sequence = SyntheticClimb.climb(moves: 2)
+        let h = WallAlignerTests.transform(rotationDegrees: 4, scale: 1.05, translation: Point2D(x: 0.02, y: -0.01))
+        let warped = sequence.warpedIntoWallSpace(by: h)
+        let inverse = try #require(h.inverted)
+
+        for name in [JointName.leftWrist, .rightAnkle, .neck] {
+            let original = try #require(sequence.frames[10].joints[name]?.point)
+            let inWallSpace = try #require(warped.frames[10].joints[name]?.point)
+            #expect(inverse.apply(to: inWallSpace).distance(to: original) < 1e-9)
+        }
+    }
 }
 
 @Suite("Time alignment")

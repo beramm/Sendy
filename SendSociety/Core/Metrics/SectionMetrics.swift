@@ -127,9 +127,24 @@ public struct MetricDelta: Sendable, Codable, Hashable {
     public var attempt: Double?
     /// `attempt − reference`. `nil` when either side is missing.
     public var delta: Double?
+    /// Confidence in the **comparison**: the weaker of the two sides, because a
+    /// difference is only as trustworthy as its worse half.
     public var confidence: Double
+    /// Confidence in each side on its own. Kept separately because a move where
+    /// the two climbers did different things still has a well-measured attempt,
+    /// and the climber's own numbers are worth reporting there even though no
+    /// comparison is.
+    public var referenceConfidence: Double
+    public var attemptConfidence: Double
 
-    public init(kind: MetricKind, reference: Double?, attempt: Double?, confidence: Double) {
+    public init(
+        kind: MetricKind,
+        reference: Double?,
+        attempt: Double?,
+        confidence: Double,
+        referenceConfidence: Double? = nil,
+        attemptConfidence: Double? = nil
+    ) {
         self.kind = kind
         self.reference = reference
         self.attempt = attempt
@@ -139,6 +154,19 @@ public struct MetricDelta: Sendable, Codable, Hashable {
             self.delta = nil
         }
         self.confidence = confidence
+        self.referenceConfidence = referenceConfidence ?? confidence
+        self.attemptConfidence = attemptConfidence ?? confidence
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(MetricKind.self, forKey: .kind)
+        reference = try c.decodeIfPresent(Double.self, forKey: .reference)
+        attempt = try c.decodeIfPresent(Double.self, forKey: .attempt)
+        delta = try c.decodeIfPresent(Double.self, forKey: .delta)
+        confidence = try c.decode(Double.self, forKey: .confidence)
+        referenceConfidence = try c.decodeIfPresent(Double.self, forKey: .referenceConfidence) ?? confidence
+        attemptConfidence = try c.decodeIfPresent(Double.self, forKey: .attemptConfidence) ?? confidence
     }
 
     public var magnitude: Double { delta.map(abs) ?? 0 }

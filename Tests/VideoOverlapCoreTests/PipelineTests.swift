@@ -550,14 +550,50 @@ struct SequenceBuilderTests {
             attemptAcquisitions: [(0, 0), (60, 1), (120, 2)],
             referenceFrameCount: 200, attemptFrameCount: 200
         )
-        #expect(result.sequences.count == 1)
-        let s = result.sequences[0]
+        // One *anchored* sequence. The footage after the last anchor is carried
+        // as an open-ended tail so the end of the go can be watched — it has no
+        // second anchor and nothing in it is compared.
+        let anchored = result.sequences.filter { $0.toAnchorID >= 0 }
+        #expect(anchored.count == 1)
+        let s = anchored[0]
         #expect(s.fromAnchorID == 0 && s.toAnchorID == 2)
         #expect(s.referenceMoves.count == 1)
         #expect(s.attemptMoves.count == 2, "attempt crosses a→b→c")
         #expect(s.moveCountDelta == 1)
         // Hold 1 is the attempt's alone, so it cannot anchor.
         #expect(result.anchorIDs == [0, 2])
+    }
+
+    /// A go that ends in a fall ends after the last shared hold, so an
+    /// anchor-bounded partition cannot reach it. On gym-testing/test1 the last
+    /// anchor is attempt frame 557 and the climber comes off at 1025 — the fall
+    /// was off the end of the scrubber entirely.
+    @Test("Footage after the last anchor is carried as a tail sequence")
+    func tailSequenceCoversTheEndOfTheGo() {
+        let result = SequenceBuilder().build(
+            route: route(3),
+            referenceAcquisitions: [(0, 0), (100, 2)],
+            attemptAcquisitions: [(0, 0), (120, 2)],
+            referenceFrameCount: 400, attemptFrameCount: 300
+        )
+        guard let tail = result.sequences.last else { return #expect(Bool(false), "no sequences at all") }
+        #expect(tail.fromAnchorID == 2)
+        #expect(tail.toAnchorID == -1, "open at the far end — there is no second anchor")
+        #expect(tail.referenceRange == 100 ..< 400)
+        #expect(tail.attemptRange == 120 ..< 300)
+        #expect(result.warnings.contains { $0.contains("anchored at one end only") })
+
+        // Too short to be worth a sequence of its own.
+        var config = TuningConfig()
+        config.terminalSequenceMinFrames = 500
+        let noTail = SequenceBuilder().build(
+            route: route(3),
+            referenceAcquisitions: [(0, 0), (100, 2)],
+            attemptAcquisitions: [(0, 0), (120, 2)],
+            referenceFrameCount: 400, attemptFrameCount: 300,
+            config: config
+        )
+        #expect(noTail.sequences.allSatisfy { $0.toAnchorID >= 0 })
     }
 
     /// Task 9.4. The attempt taking a shared hold out of the reference's order

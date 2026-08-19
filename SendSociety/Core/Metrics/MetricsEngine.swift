@@ -388,7 +388,9 @@ public struct MetricsEngine: Sendable {
                 kind: kind,
                 reference: r.value,
                 attempt: a.value,
-                confidence: min(r.confidence, a.confidence)
+                confidence: min(r.confidence, a.confidence),
+                referenceConfidence: r.confidence,
+                attemptConfidence: a.confidence
             ))
         }
         return SectionDelta(

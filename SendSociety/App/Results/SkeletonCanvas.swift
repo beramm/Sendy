@@ -45,11 +45,35 @@ struct SkeletonCanvas: View {
     /// a video cannot be rescaled without distorting it, a skeleton can. It
     /// makes the comparison about shape rather than size.
     var normalizeBodyLength = true
+    /// Off when the canvas is drawn over footage, where the video is the
+    /// background and a wash over it hides the climber.
+    var drawsBackground = true
+    /// Overrides the colour of the climber in the `reference` slot.
+    ///
+    /// Skeleton-overlay mode draws one climber per pane and passes whichever
+    /// climber that is through the reference slot, so without this the attempt
+    /// came out green — the reference's colour — and the two panes were
+    /// indistinguishable by colour in a view whose whole job is telling you
+    /// which body the tracker is on.
+    var soloColour: Color?
+    /// Applied to every point before it reaches the canvas.
+    ///
+    /// Wall space **is** the reference video's image space, so the reference
+    /// needs no transform. The attempt's pose was warped into wall space by
+    /// `WallAligner`, so drawing it on the attempt's own unwarped footage needs
+    /// the inverse — without it the skeleton sits beside the climber and reads
+    /// as a tracking failure that isn't there.
+    var transform: Homography?
+    /// Off when this canvas shows one climber, so it doesn't report the other
+    /// as having lost tracking when it was simply never asked for.
+    var reportsTracking = true
 
     var body: some View {
         Canvas { context, size in
             let rect = CGRect(origin: .zero, size: size)
-            context.fill(Path(rect), with: .color(.gray.opacity(0.12)))
+            if drawsBackground {
+                context.fill(Path(rect), with: .color(.gray.opacity(0.12)))
+            }
 
             if overlays.holds, let route {
                 for hold in route.holds {
@@ -73,7 +97,7 @@ struct SkeletonCanvas: View {
             if let referenceFrame, referenceFrame.hipCenter != nil, referenceFrame.shoulderCenter != nil {
                 draw(
                     frame: referenceFrame, metrics: referenceMetrics, scale: referenceScale,
-                    colour: .green, in: &context, size: size, label: "reference"
+                    colour: soloColour ?? .green, in: &context, size: size, label: "reference"
                 )
             }
             if let attemptFrame, attemptFrame.hipCenter != nil, attemptFrame.shoulderCenter != nil {
@@ -85,7 +109,7 @@ struct SkeletonCanvas: View {
 
             let referenceTracked = referenceFrame?.hipCenter != nil
             let attemptTracked = attemptFrame?.hipCenter != nil
-            if !referenceTracked || !attemptTracked {
+            if reportsTracking, !referenceTracked || !attemptTracked {
                 let who = !referenceTracked && !attemptTracked ? "Both climbers"
                     : (referenceTracked ? "The attempt" : "The reference climb")
                 context.draw(
@@ -106,7 +130,11 @@ struct SkeletonCanvas: View {
                 }
             }
         }
-        .background(Color(white: 0.96))
+        // Two backgrounds, and the flag has to reach both. The canvas fill above
+        // is the wall diagram's ground; this one is the view's. Skipping only
+        // the first left an opaque card painted straight over the video, so
+        // skeleton-overlay mode rendered as skeletons on nothing.
+        .background(drawsBackground ? Color(white: 0.96) : Color.clear)
     }
 
     // MARK: Drawing
@@ -167,12 +195,32 @@ struct SkeletonCanvas: View {
 
         if overlays.centreOfMass, let com = metrics.com, let p = normalized(com, frame: frame, scale: scale) {
             let c = point(p, in: size)
-            // Filled when the COM is inside the base of support, hollow when it
-            // is outside — the mechanical definition of falling.
-            let inside = metrics.baseOfSupport.comInside
             let r: CGFloat = 7
             let ellipse = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
-            if inside {
+
+            // **Three states, because "outside" and "no polygon" are different
+            // claims.**
+            //
+            // `comInside` is false both when the COM has genuinely left the
+            // base of support and when fewer than three contacts are loaded, so
+            // there is no polygon to be inside of — a climber hanging off two
+            // hands can only ever test as "outside". Drawing both as a red ring
+            // made hanging look like falling, and made this dot claim something
+            // `FallAnalyzer` explicitly refuses to claim: it skips degenerate
+            // supports for exactly this reason.
+            if metrics.baseOfSupport.isDegenerate {
+                // White, over a dark halo. The first version used `.secondary`,
+                // which is a grey chosen to recede against a UI background —
+                // over gym footage of a pale wall it disappeared entirely. The
+                // halo is what keeps it readable on light *and* dark footage,
+                // since this one is drawn over video, not over a diagram.
+                context.stroke(ellipse, with: .color(.black.opacity(0.45)), lineWidth: 5)
+                context.stroke(
+                    ellipse,
+                    with: .color(.white),
+                    style: StrokeStyle(lineWidth: 2.5, dash: [3, 3])
+                )
+            } else if metrics.baseOfSupport.comInside {
                 context.fill(ellipse, with: .color(colour))
             } else {
                 context.stroke(ellipse, with: .color(.red), lineWidth: 3)
@@ -224,6 +272,148 @@ struct SkeletonCanvas: View {
 
     /// Wall space is y-up; Canvas is y-down.
     private func point(_ p: Point2D, in size: CGSize) -> CGPoint {
-        CGPoint(x: p.x * size.width, y: (1 - p.y) * size.height)
+        let q = transform?.apply(to: p) ?? p
+        return CGPoint(x: q.x * size.width, y: (1 - q.y) * size.height)
+    }
+}
+
+/// One climber's skeleton drawn over their own footage.
+///
+/// **The tracking check.** Every number in this app comes from these joints, so
+/// a metric that looks wrong is either a bad measurement or a bad pose, and no
+/// other view separates those two: skeleton-only shows the pose without the
+/// evidence, side-by-side shows the evidence without the pose.
+///
+/// No holds and no wall diagram — the video already shows the wall, and hold
+/// circles drawn over real holds are noise.
+struct SkeletonOverlayPane: View {
+    @Environment(AppModel.self) private var model
+    let title: String
+    let video: VideoRef?
+    let pose: PoseSequence
+    let frameIndex: Int?
+    let metrics: FrameMetrics?
+    let scale: ClimbScale?
+    /// Green for the reference, orange for the attempt — the same pairing as
+    /// skeleton-only mode, so a colour means one climber across every view.
+    let colour: Color
+    /// `nil` for the reference, whose image space *is* wall space.
+    let transform: Homography?
+    let overlays: AnalyticalOverlays
+    var unavailableReason: String = "not reached"
+
+    @State private var image: CGImage?
+    @State private var decodeFailure: String?
+    @State private var cache = FrameImageCache()
+
+    private var frame: PoseFrame? { frameIndex.flatMap { pose.frame(at: $0) } }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            GeometryReader { geometry in
+                // The skeleton has to land in the same rectangle the video is
+                // drawn in, not in the pane. An aspect-fit image letterboxes
+                // inside its frame, so the fitted rect is computed rather than
+                // assumed — otherwise every joint is offset by the letterbox.
+                let fitted = fittedRect(in: geometry.size)
+                ZStack(alignment: .topLeading) {
+                    if let image {
+                        Image(decorative: image, scale: 1)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        Rectangle().fill(Color(.secondarySystemFill))
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                    SkeletonCanvas(
+                        referenceFrame: frame,
+                        referenceMetrics: metrics,
+                        referenceScale: scale,
+                        route: nil,
+                        // Holds are forced off here whatever the toggle says:
+                        // the wall is in the picture already.
+                        overlays: AnalyticalOverlays(
+                            centreOfMass: overlays.centreOfMass,
+                            baseOfSupport: overlays.baseOfSupport,
+                            limbLoad: overlays.limbLoad,
+                            divergenceVectors: false,
+                            holds: false
+                        ),
+                        // A video cannot be rescaled without distorting it, so
+                        // the skeleton is drawn where the joints actually are.
+                        normalizeBodyLength: false,
+                        drawsBackground: false,
+                        soloColour: colour,
+                        transform: transform,
+                        reportsTracking: false
+                    )
+                    .frame(width: fitted.width, height: fitted.height)
+                    .offset(x: fitted.minX, y: fitted.minY)
+
+                    if frameIndex == nil {
+                        Text(unavailableReason)
+                            .font(.caption)
+                            .padding(4)
+                            .background(.thinMaterial)
+                    } else if frame?.hipCenter == nil {
+                        Text("tracking lost on this frame")
+                            .font(.caption2)
+                            .padding(4)
+                            .background(.thinMaterial)
+                    }
+                    if let decodeFailure {
+                        VStack {
+                            Spacer()
+                            Text(decodeFailure).font(.caption2).padding(4).background(.thinMaterial)
+                        }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                }
+            }
+        }
+        .task(id: frameIndex) { await load() }
+    }
+
+    /// Where an aspect-fit image of this size actually lands inside the pane.
+    private func fittedRect(in size: CGSize) -> CGRect {
+        guard let image, image.width > 0, image.height > 0, size.width > 0, size.height > 0 else {
+            return CGRect(origin: .zero, size: size)
+        }
+        let imageAspect = CGFloat(image.width) / CGFloat(image.height)
+        let paneAspect = size.width / size.height
+        if imageAspect > paneAspect {
+            let height = size.width / imageAspect
+            return CGRect(x: 0, y: (size.height - height) / 2, width: size.width, height: height)
+        }
+        let width = size.height * imageAspect
+        return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
+    }
+
+    /// Same rules as `ClimberPane`: a cancelled decode is not an absent frame,
+    /// so the last good one stays on screen — and the decode is debounced, so
+    /// a continuous drag doesn't cancel every attempt before one finishes and
+    /// leave the video frozen under a skeleton that keeps moving.
+    private func load() async {
+        guard let video, let frame else {
+            image = nil
+            decodeFailure = nil
+            return
+        }
+        if image != nil {
+            try? await Task.sleep(for: .milliseconds(70))
+            guard !Task.isCancelled else { return }
+        }
+        guard let url = await model.videoURL(video) else {
+            decodeFailure = "the video file for this clip is missing from the session"
+            return
+        }
+        if let decoded = await cache.image(url: url, seconds: frame.timeSeconds) {
+            image = decoded
+            decodeFailure = nil
+        } else if !Task.isCancelled {
+            decodeFailure = String(format: "frame %d (%.2fs) wouldn't decode", frameIndex ?? -1, frame.timeSeconds)
+        }
     }
 }

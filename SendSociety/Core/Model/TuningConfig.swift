@@ -147,6 +147,17 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// body-length separates them comfortably.
     public var groundMargin: Double = 0.50
 
+    /// Frames of footage after the last shared hold needed before the tail of
+    /// the climb becomes a sequence of its own.
+    ///
+    /// Sequences are bounded by anchors, so everything after the last hold both
+    /// climbers took has no sequence and cannot be scrubbed to. That is where a
+    /// fall lives: on `gym-testing/test1` the attempt's last anchor is at frame
+    /// 557 and it comes off at 1025, so the fall itself was off the end of the
+    /// scrubber. The tail is not anchored at its far end and no metric is
+    /// compared across it — it exists to be watched.
+    public var terminalSequenceMinFrames: Int = 15
+
     // MARK: Depth (foreshortening)
 
     /// Percentile of observed segment length taken as `L_true`.
@@ -301,6 +312,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         routeMatchRadius = try c.decodeIfPresent(Double.self, forKey: .routeMatchRadius) ?? d.routeMatchRadius
         topOutDropMargin = try c.decodeIfPresent(Double.self, forKey: .topOutDropMargin) ?? d.topOutDropMargin
         groundMargin = try c.decodeIfPresent(Double.self, forKey: .groundMargin) ?? d.groundMargin
+        terminalSequenceMinFrames = try c.decodeIfPresent(Int.self, forKey: .terminalSequenceMinFrames) ?? d.terminalSequenceMinFrames
         segmentLengthPercentile = try c.decodeIfPresent(Double.self, forKey: .segmentLengthPercentile) ?? d.segmentLengthPercentile
         depthConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .depthConfidenceFloor) ?? d.depthConfidenceFloor
         depthSmoothingAlpha = try c.decodeIfPresent(Double.self, forKey: .depthSmoothingAlpha) ?? d.depthSmoothingAlpha
@@ -353,6 +365,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Route", label: "Attempt match radius (BL)", help: "Beyond this an attempt contact is off-route", kind: .double(\.routeMatchRadius, range: 0.05 ... 3, step: 0.05)),
         .init(group: "Route", label: "Top-out drop margin (BL)", help: "Hands going this far below the top hold end the climb; raise to disable", kind: .double(\.topOutDropMargin, range: 0.1 ... 10, step: 0.1)),
         .init(group: "Route", label: "Ground margin (BL)", help: "Feet within this of the lowest point are on the floor; the climb starts once both leave it", kind: .double(\.groundMargin, range: 0 ... 3, step: 0.05)),
+        .init(group: "Route", label: "Tail sequence (frames)", help: "Footage after the last shared hold becomes its own sequence once it is this long — where a fall lives", kind: .int(\.terminalSequenceMinFrames, range: 0 ... 300)),
 
         .init(group: "Depth", label: "Segment length percentile", help: "Percentile taken as true limb length", kind: .double(\.segmentLengthPercentile, range: 0.5 ... 1, step: 0.01)),
         .init(group: "Depth", label: "Confidence floor", help: "z suppressed below this", kind: .double(\.depthConfidenceFloor, range: 0 ... 1, step: 0.01)),

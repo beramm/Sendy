@@ -7,9 +7,15 @@ import PhotosUI
 ///
 /// **View-layer only.** Switching modes must not re-run a single pipeline
 /// stage — everything all three modes need is already in `ProcessedSession`.
+///
+/// The alpha-composited `overlay` mode was removed rather than kept as a
+/// fourth tab. Its known weakness was recorded in `plan.md` from the start —
+/// two differently-sized bodies superimposed read as clutter, because the wall
+/// lines up and the humans do not — and `skeletonOverlay` covers the question
+/// it was actually being used for: whether the tracker is seeing the climber.
 enum ComparisonMode: String, CaseIterable, Identifiable {
     case sideBySide
-    case overlay
+    case skeletonOverlay
     case skeletonOnly
 
     var id: String { rawValue }
@@ -17,7 +23,7 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .sideBySide: "Side by side"
-        case .overlay: "Overlay"
+        case .skeletonOverlay: "Skeleton overlay"
         case .skeletonOnly: "Skeleton"
         }
     }

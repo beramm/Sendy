@@ -284,7 +284,8 @@ public actor ProcessingPipeline {
             referenceAcquisitions: segmentation.referenceAcquisitions.map { ($0.frame, $0.holdID) },
             attemptAcquisitions: attemptMatch.handAcquisitions,
             referenceFrameCount: referencePose.count,
-            attemptFrameCount: attemptPose.count
+            attemptFrameCount: attemptPose.count,
+            config: config
         )
         report(
             "Moves", t,
@@ -388,7 +389,10 @@ public actor ProcessingPipeline {
         stageIndex = 8
         t = Date()
         announce("Analysis", 0)
-        var fallReport = FallDetector().detect(metrics: attemptMetrics, sections: sections, useAttemptRange: true, config: config)
+        var fallReport = FallDetector().detect(
+            metrics: attemptMetrics, sections: sections, useAttemptRange: true,
+            config: config, contacts: attemptContactResult.contacts
+        )
         fallReport = FallAnalyzer().analyze(
             report: fallReport, metrics: attemptMetrics, sections: sections,
             sectionMetrics: attemptSectionMetrics, deltas: deltas,
@@ -397,7 +401,10 @@ public actor ProcessingPipeline {
 
         // A reference climb that contains a fall is not a valid reference.
         var referenceWarnings: [String] = []
-        let referenceFall = FallDetector().detect(metrics: referenceMetrics, sections: sections, useAttemptRange: false, config: config)
+        let referenceFall = FallDetector().detect(
+            metrics: referenceMetrics, sections: sections, useAttemptRange: false,
+            config: config, contacts: referenceContactResult.contacts
+        )
         if referenceFall.occurred {
             referenceWarnings.append("The reference climb appears to contain a fall. A fallen climb is not a valid reference — the derived route may be incomplete.")
         }

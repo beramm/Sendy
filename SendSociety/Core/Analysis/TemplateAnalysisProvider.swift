@@ -75,7 +75,7 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
                     // exist, `FallReport` renders on its own.
                     text: "You started this move but didn't finish it.",
                     evidence: divergence.detail
-                )],
+                )] + ownNumbers(delta),
                 drill: nil,
                 source: name
             )
@@ -87,13 +87,9 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
                 observations: [
                     AnalysisNote(
                         text: divergence.detail,
-                        evidence: "Beta divergence: \(divergence.kind.rawValue). Metric comparison suppressed for this move."
-                    ),
-                    AnalysisNote(
-                        text: "Since it wasn't the same move, there's nothing fair to compare.",
-                        evidence: "\(delta.deltas.filter { $0.delta != nil }.count) metrics were computed but withheld."
+                        evidence: "Beta divergence: \(divergence.kind.rawValue). A difference between two different moves would be a number about nothing, so none is given."
                     )
-                ],
+                ] + ownNumbers(delta),
                 drill: "Try it their way once, then compare again.",
                 source: name
             )
@@ -131,6 +127,99 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
             drill: findings.compactMap(\.drill).first,
             source: name
         )
+    }
+
+    /// The climber's **own** measurements for a move, with no reference value
+    /// and no delta.
+    ///
+    /// A move where the two climbers did different things has no honest
+    /// comparison — that is the third rule and it does not bend. What it does
+    /// have is a well-measured attempt, and "nothing fair to compare" was
+    /// throwing that away: on `gym-testing/test1` the attempt diverged on six
+    /// of ten moves and the screen went quiet for all six, including the move
+    /// it fell on.
+    ///
+    /// So: state what *you* did, as fact, and say nothing about them. Confidence
+    /// is the attempt's own, not the comparison's, because there is no
+    /// comparison here to be the weaker half of.
+    func ownNumbers(_ delta: SectionDelta) -> [AnalysisNote] {
+        // Ordered by what a climber can act on, not by magnitude — these are
+        // facts about one climb, so there is no "biggest difference" to rank by.
+        let kinds: [MetricKind] = [
+            .hipDistanceMean, .armLoadShare, .straightArmRatio,
+            .loadAsymmetry, .footPlacementCount
+        ]
+        var notes: [AnalysisNote] = []
+        var unavailable: [MetricKind] = []
+        for kind in kinds {
+            guard let d = delta.delta(kind) else { continue }
+            // A number carried at 3% confidence is not a measurement, and hip
+            // depth reaches that whenever the limbs sit near the wall plane —
+            // which is most of a slab. Suppressed, and said out loud, rather
+            // than printed as though it were known.
+            guard let value = d.attempt, d.attemptConfidence >= config.jointConfidenceFloor else {
+                unavailable.append(kind)
+                continue
+            }
+            notes.append(AnalysisNote(
+                text: Self.ownSentence(kind, value: value),
+                evidence: String(format: "%@ on your climb: %.2f %@ · confidence %.0f%% · your number only, not a comparison",
+                                 kind.displayName, displayValue(kind, value), kind.unit, d.attemptConfidence * 100),
+                metric: kind
+            ))
+        }
+        if notes.isEmpty {
+            notes.append(AnalysisNote(
+                text: "Nothing could be measured on your side of this move either.",
+                evidence: unavailable.isEmpty
+                    ? "No metric was computable for the attempt here."
+                    : "Not computable for the attempt: " + unavailable.map(\.rawValue).joined(separator: ", ")
+            ))
+        } else if !unavailable.isEmpty {
+            notes.append(AnalysisNote(
+                text: "Some of it couldn't be measured here.",
+                evidence: "Not computable for the attempt: " + unavailable.map(\.rawValue).joined(separator: ", ")
+            ))
+        }
+        return notes
+    }
+
+    /// Percentages are stored as fractions and read as percentages.
+    func displayValue(_ kind: MetricKind, _ value: Double) -> Double {
+        kind.unit == "%" ? value * 100 : value
+    }
+
+    /// One sentence per metric, about the climber's own move. No comparative
+    /// adverbs — there is nothing to compare against here.
+    static func ownSentence(_ kind: MetricKind, value: Double) -> String {
+        switch kind {
+        case .hipDistanceMean, .hipDistancePeak:
+            return String(format: "Your hips sat about %.2f body-lengths off the wall through this move.", value)
+        case .armLoadShare, .armLoadPeak:
+            return String(format: "About %.0f%% of your weight went through your arms here.", value * 100)
+        case .straightArmRatio:
+            return String(format: "Your arms were straight %.0f%% of the time on this move.", value * 100)
+        case .loadAsymmetry:
+            return String(format: "Your weight sat %.0f%% to one side rather than evenly across both.", value * 100)
+        case .footPlacementCount:
+            return String(format: "You placed a foot %.0f time%@ on this move.", value, value == 1 ? "" : "s")
+        case .footCommitmentSeconds:
+            return String(format: "It took you about %.1fs to trust a foot once it was on.", value)
+        case .unweightedFootTime:
+            return String(format: "Your feet were on but carrying nothing %.0f%% of the time.", value * 100)
+        case .feetSetBeforeReach:
+            return String(format: "Your feet were set before the reach %.0f%% of the time.", value * 100)
+        case .comPathLength:
+            return String(format: "Your centre of mass travelled %.2f body-lengths across this move.", value)
+        case .comPeakVelocity:
+            return String(format: "Your fastest body movement here was %.2f body-lengths/s.", value)
+        case .hipTwist:
+            return String(format: "Your hips turned about %.0f° away from square to the wall.", value)
+        case .reachMargin:
+            return String(format: "You latched the hold from about %.2f body-lengths of extension.", value)
+        case .sectionDwellRatio:
+            return String(format: "You spent %.2f× as long here as the reference climber spent on their version.", value)
+        }
     }
 
     /// Headlines are short and lower-case after the move name — a phrase, not a

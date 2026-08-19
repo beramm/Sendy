@@ -97,7 +97,8 @@ public struct FallDetector: Sendable {
         metrics: ClimbMetrics,
         sections: [Section],
         useAttemptRange: Bool,
-        config: TuningConfig
+        config: TuningConfig,
+        contacts: [Contact] = []
     ) -> FallReport {
         let frames = metrics.frames
         guard frames.count > 4 else {
@@ -107,6 +108,24 @@ public struct FallDetector: Sendable {
         let sustainFrames = max(2, Int((config.fallSustainSeconds * frameRate).rounded()))
         let recontactFrames = max(1, Int((config.fallRecontactWindowSeconds * frameRate).rounded()))
 
+        // **Landing on the mat is not re-contact.**
+        //
+        // The re-contact clause exists to separate a fall from a dyno, and a
+        // dyno resolves back onto *the wall*. A climber who comes off also
+        // re-contacts something — the floor — within a few frames, and reading
+        // that as "resolved back into contact" throws away every real fall.
+        // Measured on `gym-testing/test1`: release at frame 1025, free fall to
+        // −33 body-lengths/s², feet down at 1045 at y 0.11, and the whole fall
+        // discarded as a dyno.
+        //
+        // The floor is read from the data the same way `SectionSegmenter` reads
+        // it — lowest foot contact plus `groundMargin` — so the two stages
+        // cannot disagree about where the ground is.
+        let groundJoints = groundContactJoints(contacts: contacts, frameCount: frames.count, scale: metrics.scale, config: config)
+        func offTheWall(_ i: Int) -> Bool {
+            frames[i].activeContacts.subtracting(groundJoints[i]).isEmpty
+        }
+
         // Vertical acceleration of the COM, body-lengths/s². Downward is
         // negative, so free fall is a large negative number.
         let accel = verticalAcceleration(frames, scale: metrics.scale)
@@ -114,23 +133,29 @@ public struct FallDetector: Sendable {
         // A climber walking up to the wall has no contacts and a COM that
         // bobs — real footage has head and tail on it. Nothing before the
         // first contact is part of the climb, so nothing there can be a fall.
-        guard let firstContact = frames.firstIndex(where: { !$0.activeContacts.isEmpty }) else {
+        guard let firstContact = frames.indices.first(where: { !offTheWall($0) }) else {
             return FallReport(occurred: false, warnings: ["No contacts at all, so a fall cannot be located."])
         }
 
         var candidateStart: Int?
         var fallFrame: Int?
         for i in frames.indices where i > firstContact {
-            let released = frames[i].activeContacts.isEmpty
+            let released = offTheWall(i)
             let falling = (accel[i].map { $0 <= -config.fallAccelThreshold }) ?? false
             if released && falling {
                 if candidateStart == nil { candidateStart = i }
                 if let start = candidateStart, i - start + 1 >= sustainFrames {
                     // Re-contact inside the window means this was a dyno.
                     let windowEnd = min(frames.count - 1, i + recontactFrames)
-                    let reContacted = (i ... windowEnd).contains { !frames[$0].activeContacts.isEmpty }
+                    let reContacted = (i ... windowEnd).contains { !offTheWall($0) }
                     if !reContacted {
-                        fallFrame = start
+                        // Report the frame they came off, not the frame the
+                        // acceleration became unambiguous — free fall takes a
+                        // few frames to build, and the moment of release is
+                        // what a climber recognises on screen.
+                        var release = start
+                        while release > firstContact, offTheWall(release - 1) { release -= 1 }
+                        fallFrame = release
                         break
                     } else {
                         candidateStart = nil
@@ -145,10 +170,15 @@ public struct FallDetector: Sendable {
             return FallReport(occurred: false)
         }
 
-        let sectionIndex = sections.first {
-            let range = useAttemptRange ? $0.attemptRange : $0.referenceRange
-            return range.contains(fallFrame)
-        }?.index ?? sections.last?.index
+        // The move the fall happened on. A fall at the very last frame of a span
+        // sits on its exclusive upper bound and is contained by nothing, and a
+        // fall past the last move the attempt reached is contained by nothing
+        // either — both used to land on `sections.last`, a move the attempt
+        // never climbed, which is a move the results screen cannot show.
+        func range(_ s: Section) -> Range<Int> { useAttemptRange ? s.attemptRange : s.referenceRange }
+        let sectionIndex = sections.first { range($0).contains(fallFrame) }?.index
+            ?? sections.last { !range($0).isEmpty && range($0).lowerBound <= fallFrame }?.index
+            ?? sections.first { !range($0).isEmpty }?.index
 
         // Confidence from how cleanly the signals fired, not a fixed number.
         let accelMagnitude = accel[fallFrame].map { abs($0) / max(config.fallAccelThreshold, 1e-6) } ?? 1
@@ -163,7 +193,30 @@ public struct FallDetector: Sendable {
         )
     }
 
-    func estimatedFrameRate(_ frames: [FrameMetrics]) -> Double {
+    /// Per frame, the joints whose contact is with the **floor** rather than the
+    /// wall. Empty at every frame when no contacts are supplied, which leaves
+    /// the old behaviour intact for callers that have none.
+    public func groundContactJoints(
+        contacts: [Contact],
+        frameCount: Int,
+        scale: ClimbScale,
+        config: TuningConfig
+    ) -> [Set<JointName>] {
+        var out = [Set<JointName>](repeating: [], count: frameCount)
+        guard config.groundMargin > 0 else { return out }
+        let footContacts = contacts.filter(\.isFoot)
+        guard let floor = footContacts.map(\.position.y).min() else { return out }
+        let line = floor + config.groundMargin * scale.torsoLength
+        for c in contacts where c.position.y <= line {
+            let lower = max(0, c.startFrame)
+            let upper = min(frameCount - 1, c.endFrame)
+            guard lower <= upper else { continue }
+            for i in lower ... upper { out[i].insert(c.joint) }
+        }
+        return out
+    }
+
+    public func estimatedFrameRate(_ frames: [FrameMetrics]) -> Double {
         guard frames.count > 1 else { return 30 }
         let span = frames.last!.timeSeconds - frames.first!.timeSeconds
         guard span > 1e-3 else { return 30 }
@@ -174,7 +227,7 @@ public struct FallDetector: Sendable {
     /// `fallAccelThreshold` is quoted in. Wall units would make the threshold
     /// depend on how far back the tripod stood. `nil` where the COM wasn't
     /// tracked across the window.
-    func verticalAcceleration(_ frames: [FrameMetrics], scale: ClimbScale) -> [Double?] {
+    public func verticalAcceleration(_ frames: [FrameMetrics], scale: ClimbScale) -> [Double?] {
         var out = [Double?](repeating: nil, count: frames.count)
         guard frames.count > 2 else { return out }
         for i in 1 ..< (frames.count - 1) {

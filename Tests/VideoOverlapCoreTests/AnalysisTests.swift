@@ -50,15 +50,26 @@ struct AnalysisTests {
     }
 
     /// Task 1.11 — a different sequence is a finding, not a bogus comparison.
-    @Test("Beta divergence is reported instead of compared")
+    ///
+    /// What is forbidden is the *comparison*: no delta, no reference value, no
+    /// "further out than they were". The attempt's own numbers are facts about
+    /// one climb and are reported, because a move the climber did differently
+    /// is still a move they did, and going silent there was throwing away the
+    /// only measurements that survive divergence.
+    @Test("Beta divergence reports your own numbers and no comparison")
     func divergenceReported() async throws {
         var d = Self.delta(.hipDistanceMean, reference: 0.2, attempt: 0.9)
         d.divergence = BetaDivergence(kind: .offRouteHold, detail: "You used 1 hold here that the reference climber did not.", positions: [])
         let analysis = try await TemplateAnalysisProvider().analyze(d)
         #expect(analysis.headline.contains("climbed this differently"))
-        #expect(analysis.allText.contains("nothing fair to compare"))
-        // No metric sentence should appear.
-        #expect(!analysis.allText.contains("body-lengths"))
+        // The attempt's own value, stated as its own.
+        #expect(analysis.allText.contains("0.90"))
+        #expect(analysis.observations.contains { $0.evidence.contains("your number only") })
+        // The reference's value and the delta must not appear anywhere.
+        #expect(!analysis.allText.contains("0.20"))
+        #expect(!analysis.allText.contains("0.70"))
+        #expect(!analysis.allText.lowercased().contains("than they"))
+        #expect(!analysis.allText.lowercased().contains("reference climber spent"))
     }
 
     @Test("An unreached move says so rather than showing nothing")

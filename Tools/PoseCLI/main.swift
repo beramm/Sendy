@@ -295,6 +295,91 @@ func commandSegment(_ args: [String]) throws {
     for w in result.warnings + route.warnings + segmentation.warnings { print("  warning: \(w)") }
 }
 
+// MARK: - fall (why FallDetector said what it said)
+
+/// Prints the two gates `FallDetector` ANDs together — "every contact
+/// released" and "COM accelerating downward" — frame by frame, so a
+/// non-detection can be pinned on one of them instead of guessed at.
+func commandFall(_ args: [String]) throws {
+    guard let input = args.dropFirst().first else { throw CLIError("usage: posecli fall <poses.json>") }
+    var config = configFrom(args)
+    if let v = arg("accel", args).flatMap(Double.init) { config.fallAccelThreshold = v }
+    if let v = arg("sustain", args).flatMap(Double.init) { config.fallSustainSeconds = v }
+    if let v = arg("recontact", args).flatMap(Double.init) { config.fallRecontactWindowSeconds = v }
+
+    let raw = try loadSequence(input)
+    let smoothed = PoseSmoother().process(raw, config: config)
+    let scale = ClimbScale(sequence: smoothed)
+    let contacts = ContactDetector().detect(smoothed, scale: scale, config: config)
+    let metrics = MetricsEngine().measure(sequence: smoothed, contacts: contacts.contacts, scale: scale, config: config)
+    let detector = FallDetector()
+    let frameRate = detector.estimatedFrameRate(metrics.frames)
+    let accel = detector.verticalAcceleration(metrics.frames, scale: metrics.scale)
+    let sustainFrames = max(2, Int((config.fallSustainSeconds * frameRate).rounded()))
+    let recontactFrames = max(1, Int((config.fallRecontactWindowSeconds * frameRate).rounded()))
+
+    print(String(format: "%d frames @ %.1ffps · torso %.4f wall units · %d contacts",
+                 metrics.frames.count, frameRate, scale.torsoLength, contacts.contacts.count))
+    print(String(format: "gates: released AND accel <= %.1f BL/s², sustained %d frames, no re-contact within %d",
+                 -config.fallAccelThreshold, sustainFrames, recontactFrames))
+
+    let known = accel.compactMap { $0 }
+    if let lo = known.min(), let hi = known.max() {
+        let below = known.filter { $0 <= -config.fallAccelThreshold }.count
+        print(String(format: "accel: %d of %d frames measured · min %.1f  p05 %.1f  median %.1f  p95 %.1f  max %.1f · %d frames past threshold",
+                     known.count, accel.count, lo, known.percentile(0.05) ?? 0, known.median ?? 0,
+                     known.percentile(0.95) ?? 0, hi, below))
+    } else {
+        print("accel: no frame had a COM in three consecutive frames — the COM track is the problem, not the threshold.")
+    }
+
+    // Release runs: the other gate, on its own. Ground contacts are excluded
+    // here exactly as the detector excludes them, so a run listed as "long
+    // enough" is one the detector also saw.
+    let ground = detector.groundContactJoints(
+        contacts: contacts.contacts, frameCount: metrics.frames.count, scale: metrics.scale, config: config
+    )
+    var runs: [(start: Int, end: Int)] = []
+    var start: Int?
+    for (i, f) in metrics.frames.enumerated() {
+        if f.activeContacts.subtracting(ground[i]).isEmpty {
+            if start == nil { start = i }
+        } else if let s = start {
+            runs.append((s, i - 1)); start = nil
+        }
+    }
+    if let s = start { runs.append((s, metrics.frames.count - 1)) }
+    let firstContact = metrics.frames.indices.first { !metrics.frames[$0].activeContacts.subtracting(ground[$0]).isEmpty }
+    print("first frame on the wall: \(firstContact.map(String.init) ?? "never")")
+    print("release runs (every limb off the wall; floor contacts don't count): \(runs.count)")
+    for r in runs.suffix(20) {
+        let window = accel[r.start ... r.end].compactMap { $0 }
+        let minAccel = window.min()
+        let length = r.end - r.start + 1
+        print(String(format: "  frames %4d-%-4d  %4d frames (%.2fs)  min accel %@  %@",
+                     r.start, r.end, length, Double(length) / frameRate,
+                     minAccel.map { String(format: "%7.1f", $0) } ?? "      -",
+                     length >= sustainFrames ? "long enough" : "too short"))
+    }
+
+    // The last few seconds, frame by frame — where a real fall has to live.
+    let tailStart = max(0, metrics.frames.count - Int(frameRate * 4))
+    print("\nlast 4 seconds")
+    print(" frame     t   contacts               accel   comConf")
+    for i in tailStart ..< metrics.frames.count {
+        let f = metrics.frames[i]
+        let names = f.activeContacts.map { $0.rawValue }.sorted().joined(separator: ",")
+        let a = accel[i].map { String(format: "%7.1f", $0) } ?? "      -"
+        print(String(format: "%6d %5.2f  ", i, f.timeSeconds)
+              + pad(names.isEmpty ? "—" : names, 22)
+              + " " + a + String(format: "  %.2f", f.comConfidence))
+    }
+
+    let report = detector.detect(metrics: metrics, sections: [], useAttemptRange: true, config: config, contacts: contacts.contacts)
+    print("\nverdict: \(report.occurred ? "fall at frame \(report.fallFrame ?? -1)" : "no fall")")
+    for w in report.warnings + contacts.warnings + metrics.warnings { print("warning: \(w)") }
+}
+
 // MARK: - frames (skeleton render, task 0.3)
 
 let skeletonEdges: [(JointName, JointName)] = [
@@ -403,6 +488,15 @@ func commandPipeline(_ args: [String]) async throws {
     session.attempts = [attempt]
     try await store.save(session)
 
+    // Seeding the cache with pose pulled off a device reproduces exactly what
+    // the app saw, without re-running Vision on a 100MB clip.
+    if let path = arg("ref-pose", args) {
+        try await store.cachePose(try loadSequence(path), session: session, video: reference, source: session.poseSource)
+    }
+    if let path = arg("att-pose", args) {
+        try await store.cachePose(try loadSequence(path), session: session, video: attempt, source: session.poseSource)
+    }
+
     let pipeline = ProcessingPipeline(store: store)
     let start = Date()
     let result = try await pipeline.process(session: session, config: config) { p in
@@ -432,6 +526,38 @@ func commandPipeline(_ args: [String]) async throws {
     }
     for w in sequenceResult.warnings { print("  warning: \(w)") }
 
+    // Which of the reference's own moves each sequence claims. The results
+    // screen marks the fall by asking whether the fall's move is in this list,
+    // so an overlapping or over-wide range puts the marker on every bar.
+    print("\nSEQUENCE → REFERENCE MOVES  (what the fall marker is tested against)")
+    print("  fall move index: \(result.fallReport.fallSectionIndex.map(String.init) ?? "none")")
+    print("  sections: \(result.sections.count), indices \(result.sections.map(\.index))")
+    print("  reference beta moves: \(sequenceResult.referenceBeta.moves.count) — the index space referenceMoves lives in")
+    for s in sequenceResult.sequences {
+        // Exactly what ResultsView does to decide the fall marker.
+        let sections = s.referenceMoves.filter { result.sections.indices.contains($0) }.map { result.sections[$0] }
+        let marked = sections.contains { result.fallReport.fallSectionIndex == $0.index }
+        print(String(format: "%3d   referenceMoves %2d..<%-2d  attemptMoves %2d..<%-2d   moves \(sections.map { $0.index + 1 })  fall marker: %@",
+                     s.index + 1,
+                     s.referenceMoves.lowerBound, s.referenceMoves.upperBound,
+                     s.attemptMoves.lowerBound, s.attemptMoves.upperBound,
+                     marked ? "YES" : "no"))
+    }
+
+    // Locked playback reads the attempt frame off these paths. An empty one is
+    // a pane that shows nothing however far the scrubber moves.
+    print("\nSEQUENCE WARP PATHS  (what locked scrubbing follows)")
+    for s in sequenceResult.sequences {
+        let path = result.sequenceWarpPaths.first { $0.sectionIndex == s.index }
+        let pairs = path?.pairs.count ?? 0
+        let refSpan = path.flatMap { p in p.pairs.map(\.referenceFrame).min().map { ($0, p.pairs.map(\.referenceFrame).max() ?? $0) } }
+        print(String(format: "%3d   %5d pairs  mean cost %@  covers ref %@  monotonic %@",
+                     s.index + 1, pairs,
+                     path.map { String(format: "%.3f", $0.meanCost) } ?? "—",
+                     refSpan.map { "\($0.0)-\($0.1)" } ?? "nothing",
+                     (path?.isMonotonic ?? false) ? "yes" : "NO"))
+    }
+
     // Per-move frame spans for both climbers.
     //
     // Every scrubber complaint from the gym — teleporting, a frozen pane, a
@@ -455,6 +581,31 @@ func commandPipeline(_ args: [String]) async throws {
             ratio,
             s.divergence.map { $0.kind.rawValue } ?? (s.attemptReached ? "" : "unreached")
         ))
+    }
+
+    // Both betas side by side, in hold order.
+    //
+    // "You climbed this differently" on every move is either true or a
+    // matching failure, and the only thing that separates the two is seeing
+    // which holds each climber's hands actually landed on, in which order.
+    let matcher = RouteMatcher()
+    let refMatch = matcher.match(contacts: result.referenceContacts, to: result.route, scale: result.referenceScale, config: config)
+    let attMatch = matcher.match(contacts: result.attemptContacts, to: result.route, scale: result.referenceScale, config: config)
+    print("\nHAND ACQUISITIONS  (the move boundaries — divergence lives here)")
+    print("  reference: " + refMatch.handAcquisitions.map { "\($0.holdID)@\($0.frame)" }.joined(separator: "  "))
+    print("  attempt:   " + attMatch.handAcquisitions.map { "\($0.holdID)@\($0.frame)" }.joined(separator: "  "))
+    let refOrder = refMatch.handAcquisitions.map(\.holdID)
+    let attOrder = attMatch.handAcquisitions.map(\.holdID)
+    print("  reference holds: \(Array(Set(refOrder)).sorted())")
+    print("  attempt holds:   \(Array(Set(attOrder)).sorted())")
+    print("  shared (anchor candidates): \(Array(Set(refOrder).intersection(Set(attOrder))).sorted())")
+    print("\nATTEMPT CONTACTS → HOLD  (off-route and unmatched hands are why moves vanish)")
+    print("  joint         start   end   hold      x      y   conf")
+    for m in attMatch.matched.sorted(by: { $0.contact.startFrame < $1.contact.startFrame }) {
+        print("  " + pad(m.contact.joint.rawValue, 12)
+              + String(format: " %5d %5d   ", m.contact.startFrame, m.contact.endFrame)
+              + pad(m.holdID.map(String.init) ?? "—", 5)
+              + String(format: " %.3f  %.3f   %.2f", m.contact.position.x, m.contact.position.y, m.contact.confidence))
     }
 
     for analysis in result.analyses {
@@ -722,6 +873,7 @@ guard let command = cliArgs.first else {
       contacts <poses.json> [--vthresh v] [--dwell n] [--eps e] [--merge m]
       sweep    <poses.json>
       segment  <poses.json> [--merge m] [--eps e] [--mergegap n]
+      fall     <poses.json> [--accel a] [--sustain s] [--recontact s]
       frames   <video> <poses.json> --indices 10,50 [--out dir] [--holds]
       pipeline <reference.mov> <attempt.mov>
       jitter   <poses.json>
@@ -739,6 +891,7 @@ do {
     case "contacts": try commandContacts(cliArgs)
     case "sweep": try commandSweep(cliArgs)
     case "segment": try commandSegment(cliArgs)
+    case "fall": try commandFall(cliArgs)
     case "jitter": try commandJitter(cliArgs)
     case "frames": try await commandFrames(cliArgs)
     case "pipeline": try await commandPipeline(cliArgs)

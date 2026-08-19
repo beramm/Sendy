@@ -45,35 +45,62 @@ struct ResultsView: View {
 
     @ViewBuilder
     private func content(_ processed: ProcessedSession) -> some View {
-        VStack(spacing: 8) {
-            if processed.sections.isEmpty {
-                // Task 5.8 — legible, not pretty.
+        if processed.sections.isEmpty {
+            // Task 5.8 — legible, not pretty.
+            VStack(spacing: 8) {
                 errorPanel(processed)
-            } else {
-                Picker("Mode", selection: $mode) {
-                    ForEach(ComparisonMode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-
-                comparison(processed)
-                    .frame(maxHeight: .infinity)
-
-                MoveScrubber(
-                    processed: processed,
-                    position: $position,
-                    syncLocked: $syncLocked,
-                    attemptOffsetOverride: $attemptOffsetOverride
-                )
-                .padding(.horizontal)
-
-                if mode == .skeletonOnly {
-                    OverlayToggles(overlays: $overlays).padding(.horizontal)
-                }
-
-                currentAnalysis(processed)
+                footer(processed)
             }
+            .sheet(isPresented: $showWarnings) { warningsSheet(processed) }
+        } else {
+            // **The page scrolls, not a panel inside it.**
+            //
+            // Every fixed-height box on this screen was competing with the
+            // video for the same points, and the analysis text ended up in a
+            // 140pt window with its own scrollbar — a scroll gesture that only
+            // worked if your thumb landed on the right third of the screen.
+            // One outer scroll view puts every gesture in the same place and
+            // lets the video keep a real share of the height.
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 8) {
+                        Picker("Mode", selection: $mode) {
+                            ForEach(ComparisonMode.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
 
+                        // A definite height: `maxHeight: .infinity` inside a
+                        // scroll view resolves to the content's own ideal size,
+                        // which for a video pane is nothing.
+                        comparison(processed)
+                            .frame(height: max(300, geometry.size.height * 0.62))
+
+                        MoveScrubber(
+                            processed: processed,
+                            position: $position,
+                            syncLocked: $syncLocked,
+                            attemptOffsetOverride: $attemptOffsetOverride
+                        )
+                        .padding(.horizontal)
+
+                        if mode == .skeletonOnly || mode == .skeletonOverlay {
+                            OverlayToggles(overlays: $overlays, showsDivergence: mode == .skeletonOnly)
+                                .padding(.horizontal)
+                        }
+
+                        currentAnalysis(processed)
+                        footer(processed)
+                    }
+                }
+            }
+            .sheet(isPresented: $showWarnings) { warningsSheet(processed) }
+        }
+    }
+
+    @ViewBuilder
+    private func footer(_ processed: ProcessedSession) -> some View {
+        VStack(spacing: 8) {
             HStack {
                 NavigationLink("Moves") { SectionListView(jumpTo: { jump(processed, toMove: $0) }) }
                 NavigationLink("Raw metrics") { RawMetricsView() }
@@ -99,13 +126,15 @@ struct ResultsView: View {
             }
             .padding(.horizontal)
         }
-        .sheet(isPresented: $showWarnings) {
-            NavigationStack {
-                List(Array(processed.warnings.enumerated()), id: \.offset) { _, warning in
-                    Text(warning).font(.callout)
-                }
-                .navigationTitle("Warnings")
+    }
+
+    @ViewBuilder
+    private func warningsSheet(_ processed: ProcessedSession) -> some View {
+        NavigationStack {
+            List(Array(processed.warnings.enumerated()), id: \.offset) { _, warning in
+                Text(warning).font(.callout)
             }
+            .navigationTitle("Warnings")
         }
     }
 
@@ -144,12 +173,37 @@ struct ResultsView: View {
                         : "not reached"
                 )
             }
-        case .overlay:
-            OverlayPane(
-                processed: processed,
-                referenceFrameIndex: frames.reference,
-                attemptFrameIndex: frames.attempt
-            )
+        case .skeletonOverlay:
+            HStack(spacing: 4) {
+                SkeletonOverlayPane(
+                    title: "Reference",
+                    video: processed.session.reference,
+                    pose: processed.referencePose,
+                    frameIndex: frames.reference,
+                    metrics: processed.referenceMetrics.frame(at: frames.reference),
+                    scale: processed.referenceScale,
+                    colour: .green,
+                    // Wall space is the reference's own image space.
+                    transform: nil,
+                    overlays: overlays
+                )
+                SkeletonOverlayPane(
+                    title: processed.attempt?.label ?? "Attempt",
+                    video: processed.attempt,
+                    pose: processed.attemptPose,
+                    frameIndex: frames.attempt,
+                    metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
+                    scale: processed.attemptScale,
+                    colour: .orange,
+                    // The attempt's pose was warped into wall space; put it back
+                    // into its own frame before drawing it on its own video.
+                    transform: processed.alignment.homography.inverted,
+                    overlays: overlays,
+                    unavailableReason: currentSequence(processed)?.attemptReached == false
+                        ? "no footage for this sequence"
+                        : "not reached"
+                )
+            }
         }
     }
 
@@ -187,17 +241,51 @@ struct ResultsView: View {
 
     // MARK: Panels
 
+    /// The long form of the abbreviations in the scrubber label. It lives here,
+    /// in a panel that scrolls, rather than under the video where it wrapped to
+    /// three lines — and every line under the video is a line of climber.
+    private func sequenceExplanation(_ processed: ProcessedSession) -> String? {
+        guard let sequence = currentSequence(processed) else { return nil }
+        var parts: [String] = []
+        let refMoves = sequence.referenceMoves.count
+        let attMoves = sequence.attemptMoves.count
+        if refMoves != attMoves {
+            parts.append("\(refMoves) move\(refMoves == 1 ? "" : "s") for them against \(attMoves) for you")
+        }
+        if sequence.toAnchorID < 0 {
+            parts.append("everything after hold \(sequence.fromAnchorID), the last hold you both used — anchored at one end only, so nothing in it is compared")
+        }
+        if !sequence.attemptReached { parts.append("no attempt footage in this span") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     @ViewBuilder
     private func currentAnalysis(_ processed: ProcessedSession) -> some View {
-        ScrollView {
+        Group {
             VStack(alignment: .leading, spacing: 6) {
+                if let explanation = sequenceExplanation(processed) {
+                    Text(explanation).font(.caption).foregroundStyle(.secondary)
+                }
                 let moveIndices = currentSequence(processed).map { Array($0.referenceMoves) } ?? []
-                if let fall = processed.fallAnalysis,
-                   moveIndices.contains(fall.sectionIndex) || moveIndices.contains(processed.fallReport.distalSectionIndex ?? -1) {
-                    Text(fall.headline).font(.headline).foregroundStyle(.red)
-                    ForEach(fall.observations) { AnalysisNoteRow(note: $0) }
-                    Button("Show me why") { drillIntoFall(processed) }
-                        .font(.caption)
+                // **Where you fell and where it started are different claims.**
+                //
+                // Cross-sequence attribution is the point of the feature, so the
+                // fall report deliberately appears on the earlier sequence too —
+                // but it showed the same red "You came off on move 5" headline
+                // there, which reads as the fall having happened on whichever
+                // sequence you are standing on. Same report, two sequences, and
+                // no way to tell which one you were looking at.
+                if let fall = processed.fallAnalysis {
+                    let here = moveIndices.contains(fall.sectionIndex)
+                    let startedHere = moveIndices.contains(processed.fallReport.distalSectionIndex ?? -1)
+                    if here || startedHere {
+                        Text(here ? fall.headline : distalHeadline(processed))
+                            .font(.headline)
+                            .foregroundStyle(here ? .red : .orange)
+                        ForEach(fall.observations) { AnalysisNoteRow(note: $0) }
+                        Button(here ? "Show me why" : "Take me to the fall") { drillIntoFall(processed) }
+                            .font(.caption)
+                    }
                 }
                 // A sequence can hold more than one of the reference's moves,
                 // so it shows all of their analyses rather than picking one.
@@ -219,7 +307,17 @@ struct ResultsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
         }
-        .frame(height: 140)
+        // No fixed height and no scroll view of its own: the text flows to its
+        // full length and the page carries it. Nothing here is clipped, so
+        // there is no hidden content to discover by scrolling the right third
+        // of the screen.
+    }
+
+    /// Shown on the sequence where the earliest contributing signal fired, which
+    /// is not the sequence the climber came off on.
+    private func distalHeadline(_ processed: ProcessedSession) -> String {
+        let fell = (processed.fallReport.fallSectionIndex ?? 0) + 1
+        return "This is where the fall started — you came off later, on move \(fell)."
     }
 
     @ViewBuilder
@@ -353,32 +451,48 @@ struct MoveScrubber: View {
             // One marker per sequence, widthed by how many reference moves it
             // holds, so a sequence covering two moves is visibly wider than one
             // covering a single move.
-            HStack(spacing: 2) {
-                ForEach(processed.sequences.sequences) { sequence in
-                    Rectangle()
-                        .fill(colour(for: sequence))
-                        .frame(height: 10)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(Double(max(1, sequence.referenceMoves.count)))
-                        .overlay {
-                            if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) {
-                                Text("F").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+            //
+            // **Widths are computed, not expressed as layout priority.** The
+            // first version used `.layoutPriority(moveCount)`, which is not a
+            // weight — an HStack hands the space to the highest priority first,
+            // so the six-move sequence took the whole row and the other two
+            // collapsed to nothing. On gym-testing/test1 that rendered as a
+            // single red bar with the fall marker in the middle, which reads as
+            // "every sequence is the fall".
+            GeometryReader { geometry in
+                let sequences = processed.sequences.sequences
+                let weights = sequences.map { Double(max(1, $0.referenceMoves.count)) }
+                let total = max(1, weights.reduce(0, +))
+                let gaps = Double(max(0, sequences.count - 1)) * 2
+                let available = max(0, geometry.size.width - gaps)
+                HStack(spacing: 2) {
+                    ForEach(Array(zip(sequences, weights)), id: \.0.id) { sequence, weight in
+                        Rectangle()
+                            .fill(colour(for: sequence))
+                            .frame(width: max(3, available * weight / total), height: 10)
+                            .overlay {
+                                if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) {
+                                    Text("F").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                                }
+                                // A differing move count shows as the orange bar
+                                // and is spelled out in the label above. It was
+                                // also printed into the marker as "1v2", which
+                                // at 7pt inside a 10pt bar, repeated across
+                                // every sequence, was unreadable clutter rather
+                                // than a finding.
                             }
-                            // A differing move count shows as the orange bar
-                            // and is spelled out in the label above. It was
-                            // also printed into the marker as "1v2", which at
-                            // 7pt inside a 10pt bar, repeated across every
-                            // sequence, was unreadable clutter rather than a
-                            // finding.
-                        }
-                        .onTapGesture {
-                            position = MovePosition(sectionIndex: sequence.index, offset: 0)
-                        }
+                            .onTapGesture {
+                                position = MovePosition(sectionIndex: sequence.index, offset: 0)
+                            }
+                    }
                 }
+                .frame(width: geometry.size.width, alignment: .leading)
             }
+            .frame(height: 10)
 
-            Toggle("Sync locked to the reference climber's sequence", isOn: $syncLocked)
+            Toggle("Sync locked to the reference's sequence", isOn: $syncLocked)
                 .font(.caption)
+                .lineLimit(1)
                 .onChange(of: syncLocked) { _, locked in
                     attemptOffsetOverride = locked ? nil : position.offset
                 }
@@ -393,26 +507,34 @@ struct MoveScrubber: View {
         }
     }
 
+    /// One line, because it sits directly under the video and every line it
+    /// wraps to is a line of climber taken off the screen. The long forms of
+    /// these clauses moved into the analysis panel, which is scrollable.
     private var label: String {
         let sequences = processed.sequences.sequences
         guard sequences.indices.contains(position.sectionIndex) else { return "no sequences" }
         let sequence = sequences[position.sectionIndex]
-        var text = "Sequence \(position.sectionIndex + 1) of \(sequences.count)  \(Int(position.offset * 100))%"
+        var text = "Seq \(position.sectionIndex + 1)/\(sequences.count)  \(Int(position.offset * 100))%"
         // Move counts per climber, which is the finding this layer exists to
         // surface: three moves against one is not a mismatch, it is the
         // difference worth reporting.
         let refMoves = sequence.referenceMoves.count
         let attMoves = sequence.attemptMoves.count
-        if refMoves != attMoves { text += "  (\(refMoves) move\(refMoves == 1 ? "" : "s") vs your \(attMoves))" }
-        if !sequence.attemptReached { text += "  (no attempt footage)" }
+        if refMoves != attMoves { text += "  \(refMoves)v\(attMoves)" }
+        if !sequence.attemptReached { text += "  no footage" }
+        // The tail has one anchor, not two. Saying so is the difference between
+        // "the app compared these and found nothing" and "there is nothing here
+        // that can be compared" — and the fall lives in this span.
+        if sequence.toAnchorID < 0 { text += "  tail" }
         // Truncation is a claim about the climber coming off, so it is read
         // from the moves inside this sequence rather than assumed from the
         // sequence itself.
         if moves(of: sequence).contains(where: { $0.divergence?.kind == .truncated }) {
-            text += "  (came off here)"
+            text += "  came off"
         }
         return text
     }
+
 
     /// The reference's own moves inside a sequence.
     private func moves(of sequence: ClimbSequence) -> [Section] {
@@ -431,6 +553,10 @@ struct MoveScrubber: View {
 
 struct OverlayToggles: View {
     @Binding var overlays: AnalyticalOverlays
+    /// Divergence vectors join the two climbers' joints, which only means
+    /// something on one shared diagram. In skeleton-overlay mode each climber
+    /// is on their own footage, so there is no line to draw between them.
+    var showsDivergence = true
 
     var body: some View {
         ViewThatFits {
@@ -438,7 +564,7 @@ struct OverlayToggles: View {
                 Toggle("COM", isOn: $overlays.centreOfMass)
                 Toggle("BOS", isOn: $overlays.baseOfSupport)
                 Toggle("Load", isOn: $overlays.limbLoad)
-                Toggle("Diff", isOn: $overlays.divergenceVectors)
+                if showsDivergence { Toggle("Diff", isOn: $overlays.divergenceVectors) }
             }
             .toggleStyle(.button)
             .font(.caption)
@@ -447,9 +573,20 @@ struct OverlayToggles: View {
                 Toggle("Centre of mass", isOn: $overlays.centreOfMass)
                 Toggle("Base of support", isOn: $overlays.baseOfSupport)
                 Toggle("Limb load", isOn: $overlays.limbLoad)
-                Toggle("Divergence", isOn: $overlays.divergenceVectors)
+                if showsDivergence { Toggle("Divergence", isOn: $overlays.divergenceVectors) }
             }
             .font(.caption)
+        }
+
+        // A three-state marker nobody can read is a two-state marker plus
+        // confusion. The key costs one line and answers the question at the
+        // point it gets asked.
+        if overlays.centreOfMass {
+            Text("COM  filled = inside BOS · red = outside · white dashed = no polygon")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 }
@@ -469,6 +606,7 @@ struct ClimberPane: View {
     var unavailableReason: String = "not reached"
 
     @State private var image: CGImage?
+    @State private var decodeFailure: String?
     @State private var cache = FrameImageCache()
 
     var body: some View {
@@ -483,11 +621,23 @@ struct ClimberPane: View {
                     Rectangle().fill(Color(.secondarySystemFill))
                         .overlay { Text("no frame").font(.caption2).foregroundStyle(.secondary) }
                 }
-                // No skeleton over video. Two differently-sized bodies with
-                // stick figures drawn on them read as clutter, and the video
-                // modes are for watching the climb — the skeleton and its
-                // analytical overlays belong in skeleton-only mode, which
-                // exists precisely because they are illegible over footage.
+                // A decode that failed is a different thing from a frame that
+                // does not exist, and saying which is the difference between
+                // "the pipeline found nothing here" and "the scrubber outran
+                // the decoder". The last good frame stays on screen underneath.
+                if let decodeFailure {
+                    VStack {
+                        Spacer()
+                        Text(decodeFailure)
+                            .font(.caption2)
+                            .padding(4)
+                            .background(.thinMaterial)
+                    }
+                }
+                // No skeleton here. This pane is for watching the climb; the
+                // skeleton over footage is its own mode, where one skeleton
+                // sits on one climber in its own pane. Drawing it here as well
+                // would put line art over a picture that is already legible.
                 if frameIndex == nil {
                     Text(unavailableReason)
                         .font(.caption)
@@ -499,77 +649,39 @@ struct ClimberPane: View {
         .task(id: frameIndex) { await load() }
     }
 
+    /// **Never blanks the pane on a failed decode.**
+    ///
+    /// `.task(id:)` cancels the previous load on every scrubber tick, and a
+    /// cancelled `AVAssetImageGenerator` returns nothing. Assigning that nothing
+    /// straight into `image` is what made dragging the scrubber flash "no
+    /// frame": the pipeline was fine and the decoder was simply behind. The last
+    /// good frame stays up, and only a real absence — no frame index, no pose
+    /// frame — clears it.
     private func load() async {
         guard let video, let frameIndex, let frame = pose.frame(at: frameIndex) else {
             image = nil
+            decodeFailure = nil
             return
         }
-        guard let url = await model.videoURL(video) else { return }
-        image = await cache.image(url: url, seconds: frame.timeSeconds)
-    }
-}
-
-/// Overlay mode. The reference frame is warped into the attempt's wall space
-/// and composited over it, so you see one climber through the other.
-///
-/// Video only — no skeletons. Drawing stick figures on top of two bodies that
-/// are already superimposed is what made this mode unreadable; the wall lines
-/// up and the humans do not, and adding line art over that does not help.
-/// Skeletons and the analytical overlays live in skeleton-only mode.
-struct OverlayPane: View {
-    @Environment(AppModel.self) private var model
-    let processed: ProcessedSession
-    let referenceFrameIndex: Int
-    let attemptFrameIndex: Int?
-
-    @State private var attemptImage: CGImage?
-    @State private var referenceImage: CGImage?
-    @State private var cache = FrameImageCache()
-
-    var body: some View {
-        ZStack {
-            if let attemptImage {
-                Image(decorative: attemptImage, scale: 1).resizable().aspectRatio(contentMode: .fit)
-            } else {
-                Rectangle().fill(Color(.secondarySystemFill))
-            }
-            if let referenceImage {
-                Image(decorative: referenceImage, scale: 1)
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .opacity(0.4)
-            }
-            if !processed.alignment.succeeded {
-                VStack {
-                    Text("Registration failed — the two clips are not aligned. Treat this overlay as unreliable.")
-                        .font(.caption)
-                        .padding(6)
-                        .background(.thinMaterial)
-                    Spacer()
-                }
-            }
+        // Settle before decoding. Every scrubber tick cancels the previous
+        // load, and a 4K frame takes longer to decode than a drag takes to
+        // move — so during a continuous drag no decode ever finished and the
+        // pane held its last frame while the skeleton tracked the slider. The
+        // sleep is cancelled along with the task, so only the position the
+        // finger stopped on actually decodes. First frame is immediate.
+        if image != nil {
+            try? await Task.sleep(for: .milliseconds(70))
+            guard !Task.isCancelled else { return }
         }
-        .task(id: attemptFrameIndex) { await load() }
-    }
-
-    private func load() async {
-        guard let attempt = processed.attempt,
-              let attemptURL = await model.videoURL(attempt),
-              let referenceRef = processed.session.reference,
-              let referenceURL = await model.videoURL(referenceRef) else { return }
-
-        if let attemptFrameIndex, let frame = processed.attemptPose.frame(at: attemptFrameIndex) {
-            attemptImage = await cache.image(url: attemptURL, seconds: frame.timeSeconds)
+        guard let url = await model.videoURL(video) else {
+            decodeFailure = "the video file for this clip is missing from the session"
+            return
         }
-        if let frame = processed.referencePose.frame(at: referenceFrameIndex),
-           let raw = await cache.image(url: referenceURL, seconds: frame.timeSeconds) {
-            // Wall space is the reference's own frame, so the reference is
-            // warped by the inverse to land in the attempt's frame.
-            if let inverse = processed.alignment.homography.inverted,
-               let warped = WallAligner.warp(raw, by: inverse, like: raw) {
-                referenceImage = warped
-            } else {
-                referenceImage = raw
-            }
+        if let decoded = await cache.image(url: url, seconds: frame.timeSeconds) {
+            image = decoded
+            decodeFailure = nil
+        } else if !Task.isCancelled {
+            decodeFailure = String(format: "frame %d (%.2fs) wouldn't decode", frameIndex, frame.timeSeconds)
         }
     }
 }
