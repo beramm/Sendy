@@ -147,6 +147,81 @@ func commandSweep(_ args: [String]) throws {
     }
 }
 
+// MARK: - route (why does this route have that many holds?)
+
+/// The evidence behind `RouteBuilder`'s hold count.
+///
+/// Hold count is the number that decides whether the moves mean anything, and
+/// three separate things move it: contacts made on the floor, the cluster
+/// radius, and contacts touched exactly once. This prints all three so a hold
+/// count can be argued with rather than eyeballed.
+func commandRoute(_ args: [String]) throws {
+    guard let input = args.dropFirst().first else { throw CLIError("usage: posecli route <poses.json>") }
+    let config = configFrom(args)
+    let smoothed = PoseSmoother().process(try loadSequence(input), config: config)
+    let scale = ClimbScale(sequence: smoothed)
+    let contacts = ContactDetector().detect(smoothed, scale: scale, config: config).contacts
+
+    print(String(format: "torso %.4f wall units   contacts %d", scale.torsoLength, contacts.count))
+    let dwells = contacts.map(\.frameCount).sorted()
+    if !dwells.isEmpty {
+        print("dwell frames: min \(dwells[0])  p25 \(dwells[dwells.count / 4])  median \(dwells[dwells.count / 2])  p75 \(dwells[3 * dwells.count / 4])  max \(dwells[dwells.count - 1])")
+    }
+
+    let feet = contacts.filter(\.isFoot)
+    if let floor = feet.map(\.position.y).min() {
+        let line = floor + config.groundMargin * scale.torsoLength
+        let onGround = contacts.filter { $0.isFoot && $0.position.y <= line }
+        print(String(format: "floor y %.3f  ground line %.3f  contacts on the floor %d", floor, line, onGround.count))
+        for c in onGround.sorted(by: { $0.startFrame < $1.startFrame }) {
+            print(String(format: "  floor  %@  f%d-%d  y %.3f", pad(c.joint.rawValue, 11), c.startFrame, c.endFrame, c.position.y))
+        }
+    }
+
+    var nn: [Double] = []
+    for (i, a) in contacts.enumerated() {
+        var best = Double.infinity
+        for (j, b) in contacts.enumerated() where i != j { best = min(best, scale.distance(a.position, b.position)) }
+        if best.isFinite { nn.append(best) }
+    }
+    let s = nn.sorted()
+    if !s.isEmpty {
+        print(String(format: "nearest-neighbour BL: p10 %.2f  p25 %.2f  median %.2f  p75 %.2f  p90 %.2f  max %.2f",
+                     s[s.count / 10], s[s.count / 4], s[s.count / 2], s[3 * s.count / 4], s[9 * s.count / 10], s[s.count - 1]))
+    }
+
+    print("\neps(BL)  holds  hand  single-contact")
+    for eps in [0.20, 0.30, 0.40, 0.50, 0.60, 0.75, 0.90, 1.10, 1.40] {
+        var c2 = config
+        c2.holdClusterEpsilon = eps
+        let r = RouteBuilder().build(contacts: contacts, scale: scale, config: c2)
+        print(String(format: "%6.2f   %4d  %4d  %8d", eps, r.holds.count, r.handHolds.count, r.holds.filter { $0.contactCount == 1 }.count))
+    }
+
+    // Spread is the diameter of a cluster. A hold has a physical size, so a
+    // "hold" whose contacts span more than about one hold width is a chain of
+    // separate holds joined by single-linkage, not a hold.
+    print("\nhold  n   spread(BL)  hand  x      y")
+    let full = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+    for h in full.holds {
+        let members = contacts.filter { scale.distance($0.position, h.position) <= config.holdClusterEpsilon * 3 }
+            .filter { c in full.holds.min(by: { scale.distance($0.position, c.position) < scale.distance($1.position, c.position) })?.id == h.id }
+        var spread = 0.0
+        for a in members { for b in members { spread = max(spread, scale.distance(a.position, b.position)) } }
+        print(String(format: "%4d %3d   %8.2f   %@  %.3f  %.3f", h.ordinal + 1, h.contactCount, spread, h.isHandHold ? "yes " : "no  ", h.position.x, h.position.y))
+    }
+
+    let route = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+    print("\nsingle-contact holds at eps \(config.holdClusterEpsilon):")
+    for h in route.holds where h.contactCount == 1 {
+        let c = contacts.first { $0.startFrame == h.firstFrame && $0.joint == h.firstUsedBy }
+        print(String(format: "  hold %2d  %@ f%4d  dwell %3d  x %.3f  y %.3f  conf %.2f",
+                     h.ordinal + 1, pad(h.firstUsedBy.rawValue, 11), h.firstFrame,
+                     c?.frameCount ?? -1, h.position.x, h.position.y, c?.confidence ?? -1))
+    }
+    for w in route.warnings { print("warning: \(w)") }
+}
+
 // MARK: - jitter (what is the noise floor on a joint that is not moving?)
 
 /// Frame-to-frame movement of a joint *during a detected contact*, in pixels of
@@ -632,6 +707,24 @@ func commandPipeline(_ args: [String]) async throws {
     let reprocessStart = Date()
     let again = try await pipeline.process(session: session, config: second)
     print(String(format: "\nreprocess: %.2fs  pose stage: %@", Date().timeIntervalSince(reprocessStart), again.stages[0].detail))
+    // The plate has to survive a threshold change the same way pose does —
+    // it depends on the video and its own three fields, and on nothing else.
+    if let stage = again.stages.first(where: { $0.name == "Wall backdrop" }) {
+        print("reprocess backdrop: \(stage.detail)")
+    }
+
+    // Written out so the plate can be looked at without a device: the whole
+    // point of it is whether a derived hold lands on a real one.
+    if let out = arg("plate-out", args), let plate = result.wallPlate {
+        let url = URL(fileURLWithPath: out)
+        if let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
+            CGImageDestinationAddImage(destination, plate.image, nil)
+            if CGImageDestinationFinalize(destination) {
+                print("plate → \(out)  \(plate.image.width)×\(plate.image.height)")
+            }
+        }
+    }
+
     try? FileManager.default.removeItem(at: root)
 }
 
@@ -872,10 +965,11 @@ guard let command = cliArgs.first else {
       pose     <video> [--out poses.json] [--rate 30]
       contacts <poses.json> [--vthresh v] [--dwell n] [--eps e] [--merge m]
       sweep    <poses.json>
+      route    <poses.json>
       segment  <poses.json> [--merge m] [--eps e] [--mergegap n]
       fall     <poses.json> [--accel a] [--sustain s] [--recontact s]
       frames   <video> <poses.json> --indices 10,50 [--out dir] [--holds]
-      pipeline <reference.mov> <attempt.mov>
+      pipeline <reference.mov> <attempt.mov> [--plate-out wall.png]
       jitter   <poses.json>
       agree    <swift.json> <python.json>
       compare  <reference.mov> <attempt.mov> --b-ref p.json --b-att p.json
@@ -893,6 +987,7 @@ do {
     case "segment": try commandSegment(cliArgs)
     case "fall": try commandFall(cliArgs)
     case "jitter": try commandJitter(cliArgs)
+    case "route": try commandRoute(cliArgs)
     case "frames": try await commandFrames(cliArgs)
     case "pipeline": try await commandPipeline(cliArgs)
     case "seed": try await commandSeed(cliArgs)

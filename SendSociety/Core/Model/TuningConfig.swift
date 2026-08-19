@@ -92,19 +92,23 @@ public struct TuningConfig: Sendable, Codable, Hashable {
 
     // MARK: Route derivation — DBSCAN
 
-    /// Cluster radius in **body-lengths**. Holds a climber uses as distinct sit
-    /// at least this far apart.
+    /// **Radius of a hold**, in body-lengths. Contacts more than twice this
+    /// apart are never the same hold, however many contacts lie between them.
     ///
-    /// Swept against the real fixture: the derived move count is flat at 7–8
-    /// across 0.30–0.55 and drops to 6 by 0.70, so this sits in the stable band
-    /// rather than at its edge. Lower also resists DBSCAN chaining, which
-    /// matters more now that merging no longer thins the contacts first —
-    /// `holdClusterMinPoints` is 1, so every contact is a core point and dense
-    /// runs of them will otherwise link into one cluster.
-    public var holdClusterEpsilon: Double = 0.40
-    /// Minimum contacts to seed a cluster. 1 keeps single-touch holds, which
-    /// matters because the reference climber touches some holds exactly once.
-    public var holdClusterMinPoints: Int = 1
+    /// The "however many lie between them" is the point. `RouteBuilder` used
+    /// DBSCAN with a min-points of 1, which is single linkage: clusters grew by
+    /// transitive closure and nothing bounded their size, so on
+    /// `gym-testing/test1` four "holds" spanned 1.0–1.2 body-lengths — regions
+    /// covering several real holds — while isolated touches stayed separate.
+    /// Complete linkage caps the cluster *diameter* at `2 × radius`, which is
+    /// the physical fact: a hold is a bounded object.
+    ///
+    /// Swept against the real pair after that change: holds/hand-holds/moves
+    /// are 18/11/14 at 0.40, 17/11/14 at 0.45, 15/10/14 at 0.50, and fall to
+    /// 14/9/10 by 0.60 — so 0.40–0.50 is the stable band and this sits in the
+    /// middle of it rather than on an edge. Below 0.40 the count climbs
+    /// steeply (24 holds at 0.30) as single holds splinter.
+    public var holdClusterEpsilon: Double = 0.45
     /// Sanity band. Outside it, route derivation reports a warning rather than
     /// proceeding silently.
     public var minPlausibleHolds: Int = 3
@@ -256,6 +260,28 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// comparable and the user is told to re-record.
     public var registrationResidualLimit: Double = 0.035
 
+    // MARK: Wall backdrop (clean plate)
+
+    /// Frames sampled across the clip for the pose-masked temporal median.
+    ///
+    /// More samples means a cleaner plate and more memory: every sample is held
+    /// decoded at once, at `wallPlateMaxDimension`. Sixteen is a guess that
+    /// covers a 20-second clip about once per second.
+    public var wallPlateSampleCount: Int = 16
+    /// Padding on the pose bounding box before it is masked out, normalized.
+    ///
+    /// **Deliberately larger than the registration mask.** Vision gives no
+    /// fingers and no toes, so the joint box stops short of the climber's real
+    /// silhouette, and an under-padded mask leaves hands and shoes in the
+    /// median.
+    public var wallPlateMaskPadding: Double = 0.08
+    /// Long side of the plate in pixels. It is a backdrop behind a stick
+    /// figure; resolution beyond this buys nothing and costs memory linearly in
+    /// the sample count.
+    public var wallPlateMaxDimension: Int = 512
+    /// Below this share of covered pixels the plate is reported as ghosting.
+    public var wallPlateCoverageFloor: Double = 0.97
+
     public init() {}
 
     // MARK: Debug panel metadata
@@ -306,7 +332,6 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         contactMergeGapFrames = try c.decodeIfPresent(Int.self, forKey: .contactMergeGapFrames) ?? d.contactMergeGapFrames
         contactConfidenceFloor = try c.decodeIfPresent(Double.self, forKey: .contactConfidenceFloor) ?? d.contactConfidenceFloor
         holdClusterEpsilon = try c.decodeIfPresent(Double.self, forKey: .holdClusterEpsilon) ?? d.holdClusterEpsilon
-        holdClusterMinPoints = try c.decodeIfPresent(Int.self, forKey: .holdClusterMinPoints) ?? d.holdClusterMinPoints
         minPlausibleHolds = try c.decodeIfPresent(Int.self, forKey: .minPlausibleHolds) ?? d.minPlausibleHolds
         maxPlausibleHolds = try c.decodeIfPresent(Int.self, forKey: .maxPlausibleHolds) ?? d.maxPlausibleHolds
         routeMatchRadius = try c.decodeIfPresent(Double.self, forKey: .routeMatchRadius) ?? d.routeMatchRadius
@@ -340,6 +365,10 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         comCoverageFloor = try c.decodeIfPresent(Double.self, forKey: .comCoverageFloor) ?? d.comCoverageFloor
         interpolatedConfidenceFactor = try c.decodeIfPresent(Double.self, forKey: .interpolatedConfidenceFactor) ?? d.interpolatedConfidenceFactor
         registrationResidualLimit = try c.decodeIfPresent(Double.self, forKey: .registrationResidualLimit) ?? d.registrationResidualLimit
+        wallPlateSampleCount = try c.decodeIfPresent(Int.self, forKey: .wallPlateSampleCount) ?? d.wallPlateSampleCount
+        wallPlateMaskPadding = try c.decodeIfPresent(Double.self, forKey: .wallPlateMaskPadding) ?? d.wallPlateMaskPadding
+        wallPlateMaxDimension = try c.decodeIfPresent(Int.self, forKey: .wallPlateMaxDimension) ?? d.wallPlateMaxDimension
+        wallPlateCoverageFloor = try c.decodeIfPresent(Double.self, forKey: .wallPlateCoverageFloor) ?? d.wallPlateCoverageFloor
     }
 
     public static let fields: [Field] = [
@@ -358,8 +387,7 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Contacts", label: "Merge gap (frames)", help: "Max frames between merged contacts", kind: .int(\.contactMergeGapFrames, range: 0 ... 60)),
         .init(group: "Contacts", label: "Confidence floor", help: "Mean joint confidence a contact must clear", kind: .double(\.contactConfidenceFloor, range: 0 ... 1, step: 0.01)),
 
-        .init(group: "Route", label: "Cluster epsilon (BL)", help: "DBSCAN radius in body-lengths", kind: .double(\.holdClusterEpsilon, range: 0.05 ... 3, step: 0.05)),
-        .init(group: "Route", label: "Cluster min points", help: "Contacts needed to seed a hold", kind: .int(\.holdClusterMinPoints, range: 1 ... 5)),
+        .init(group: "Route", label: "Hold radius (BL)", help: "Contacts more than twice this apart are different holds", kind: .double(\.holdClusterEpsilon, range: 0.05 ... 3, step: 0.05)),
         .init(group: "Route", label: "Min plausible holds", help: "Below this, warn", kind: .int(\.minPlausibleHolds, range: 1 ... 10)),
         .init(group: "Route", label: "Max plausible holds", help: "Above this, warn", kind: .int(\.maxPlausibleHolds, range: 5 ... 60)),
         .init(group: "Route", label: "Attempt match radius (BL)", help: "Beyond this an attempt contact is off-route", kind: .double(\.routeMatchRadius, range: 0.05 ... 3, step: 0.05)),
@@ -399,7 +427,12 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Coverage", label: "COM coverage floor", help: "Share of a move needing a COM", kind: .double(\.comCoverageFloor, range: 0 ... 1, step: 0.05)),
         .init(group: "Coverage", label: "Interpolated confidence factor", help: "Discount on a bridged joint position", kind: .double(\.interpolatedConfidenceFactor, range: 0 ... 1, step: 0.05)),
 
-        .init(group: "Registration", label: "Residual limit", help: "Above this, clips aren't comparable", kind: .double(\.registrationResidualLimit, range: 0.001 ... 0.2, step: 0.002))
+        .init(group: "Registration", label: "Residual limit", help: "Above this, clips aren't comparable", kind: .double(\.registrationResidualLimit, range: 0.001 ... 0.2, step: 0.002)),
+
+        .init(group: "Wall backdrop", label: "Samples", help: "Frames medianed into the clean plate", kind: .int(\.wallPlateSampleCount, range: 4 ... 48)),
+        .init(group: "Wall backdrop", label: "Mask padding", help: "Grown around the joint box — Vision has no fingers or toes", kind: .double(\.wallPlateMaskPadding, range: 0 ... 0.3, step: 0.01)),
+        .init(group: "Wall backdrop", label: "Max dimension (px)", help: "Long side of the plate", kind: .int(\.wallPlateMaxDimension, range: 128 ... 1024)),
+        .init(group: "Wall backdrop", label: "Coverage floor", help: "Below this share of unoccluded pixels, warn about ghosting", kind: .double(\.wallPlateCoverageFloor, range: 0 ... 1, step: 0.01))
     ]
 
     public subscript(double field: WritableKeyPath<TuningConfig, Double>) -> Double {

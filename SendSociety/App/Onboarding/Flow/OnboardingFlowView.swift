@@ -22,10 +22,22 @@ enum OnboardingMotionWaveMovement {
 }
 
 enum OnboardingConfiguration {
-    /// Development switch: `true` presents onboarding once on every app launch.
-    /// Release builds always use the persisted first-launch behavior.
+    /// Forces onboarding even though it has already been completed.
+    ///
+    /// **Opt-in, never on by default.** Onboarding is a first-install
+    /// experience: once `hasCompletedOnboarding` is set it stays set for the
+    /// life of the install, across relaunches and app updates, and is cleared
+    /// only by deleting the app. A debug build that showed it on every launch
+    /// made that impossible to verify — the persisted path never ran during
+    /// development, which is the one place it would have been noticed if it
+    /// were broken.
+    ///
+    /// Pass `--show-onboarding` in the scheme's launch arguments to see the
+    /// flow again without deleting the app or editing this file:
+    ///
+    ///     xcrun simctl launch <device> <bundle-id> --show-onboarding
 #if DEBUG
-    static let alwaysShowOnLaunch = true
+    static let alwaysShowOnLaunch = ProcessInfo.processInfo.arguments.contains("--show-onboarding")
 #else
     static let alwaysShowOnLaunch = false
 #endif

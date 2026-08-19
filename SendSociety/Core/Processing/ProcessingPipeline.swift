@@ -70,6 +70,13 @@ public struct ProcessedSession: Sendable {
     public var fallReport: FallReport
     public var fallAnalysis: SectionAnalysis?
     public var alignment: AlignmentResult
+    /// The wall with the climber removed, derived from the reference clip.
+    ///
+    /// **A backdrop, never evidence.** Nothing in `MetricsEngine`,
+    /// `RouteBuilder` or `ContactDetector` may read it. Nil when it could not
+    /// be built, in which case the skeleton view keeps its plain background and
+    /// the stage report says why.
+    public var wallPlate: WallPlate?
     public var stages: [StageReport]
 
     /// Every warning from every stage, in pipeline order. The results screen
@@ -128,7 +135,7 @@ public enum ProcessingError: Error, LocalizedError {
 ///    degraded one and a visible warning. No stage throws except on genuinely
 ///    missing inputs.
 public actor ProcessingPipeline {
-    public static let stageCount = 9
+    public static let stageCount = 10
 
     let store: SessionStore
     /// Overrides the session's `poseSource` when set. Tests inject a spy here;
@@ -239,9 +246,38 @@ public actor ProcessingPipeline {
 
         try checkCancelled()
 
-        // MARK: 4. Contacts
+        // MARK: 4. Wall backdrop
 
+        // Built from the reference clip, because wall space *is* the reference
+        // clip's image space — a plate from it needs no homography to sit under
+        // the skeleton canvas. It runs off the pose that is already in hand, so
+        // it never touches Vision, and it feeds nothing downstream: no metric,
+        // no hold, no contact may read it.
         stageIndex = 3
+        t = Date()
+        announce("Wall backdrop", 0)
+        let plateResult = await plate(
+            for: referenceRef, session: session, pose: smoothedReference, config: config
+        )
+        report(
+            "Wall backdrop", t,
+            plateResult.plate == nil
+                ? .failed
+                : (plateResult.warnings.isEmpty ? .ok : .degraded),
+            plateResult.plate.map { p in
+                String(
+                    format: "%.1f%% of the wall recovered from %d frames%@",
+                    p.coverage * 100, p.sampleCount, plateResult.fromCache ? ", from cache" : ""
+                )
+            } ?? "no backdrop; the skeleton view uses a plain background",
+            plateResult.warnings
+        )
+
+        try checkCancelled()
+
+        // MARK: 5. Contacts
+
+        stageIndex = 4
         t = Date()
         announce("Contacts", 0)
         let referenceScale = ClimbScale(sequence: referencePose)
@@ -258,9 +294,9 @@ public actor ProcessingPipeline {
 
         try checkCancelled()
 
-        // MARK: 5. Route
+        // MARK: 6. Route
 
-        stageIndex = 4
+        stageIndex = 5
         t = Date()
         announce("Route", 0)
         let derivedRoute = RouteBuilder().build(contacts: referenceContactResult.contacts, scale: referenceScale, config: config)
@@ -274,9 +310,9 @@ public actor ProcessingPipeline {
             route.warnings
         )
 
-        // MARK: 6. Matching and segmentation
+        // MARK: 7. Matching and segmentation
 
-        stageIndex = 5
+        stageIndex = 6
         t = Date()
         announce("Moves", 0)
         let matcher = RouteMatcher()
@@ -315,9 +351,9 @@ public actor ProcessingPipeline {
 
         try checkCancelled()
 
-        // MARK: 7. Time alignment
+        // MARK: 8. Time alignment
 
-        stageIndex = 6
+        stageIndex = 7
         t = Date()
         announce("Time alignment", 0)
         let referenceContactStates = TimeAligner.contactStates(contacts: referenceContactResult.contacts, frameCount: referencePose.count)
@@ -365,9 +401,9 @@ public actor ProcessingPipeline {
             unaligned > 0 ? ["\(unaligned) moves could not be time-aligned because the attempt has no frames there."] : []
         )
 
-        // MARK: 8. Metrics
+        // MARK: 9. Metrics
 
-        stageIndex = 7
+        stageIndex = 8
         t = Date()
         announce("Metrics", 0)
         let engine = MetricsEngine()
@@ -403,9 +439,9 @@ public actor ProcessingPipeline {
 
         try checkCancelled()
 
-        // MARK: 9. Falls and analysis
+        // MARK: 10. Falls and analysis
 
-        stageIndex = 8
+        stageIndex = 9
         t = Date()
         announce("Analysis", 0)
         var fallReport = FallDetector().detect(
@@ -480,6 +516,7 @@ public actor ProcessingPipeline {
             fallReport: fallReport,
             fallAnalysis: fallAnalysis,
             alignment: alignment,
+            wallPlate: plateResult.plate,
             stages: stages
         )
     }
@@ -656,6 +693,28 @@ public actor ProcessingPipeline {
         let sequence = try await extractor.extract(url: url, config: config, progress: progress)
         try? await store.cachePose(sequence, session: session, video: video, source: source)
         return (sequence, false)
+    }
+
+    /// The wall backdrop, from cache when one exists for these plate settings.
+    ///
+    /// Cached like pose, and for the same reason: reprocessing on a changed
+    /// threshold is the tuning loop, and a decode pass over sixteen frames on
+    /// every pass makes that loop slower for a picture that did not change.
+    func plate(
+        for video: VideoRef,
+        session: ClimbSession,
+        pose: PoseSequence,
+        config: TuningConfig
+    ) async -> (plate: WallPlate?, warnings: [String], fromCache: Bool) {
+        if let cached = await store.cachedPlate(session: session, video: video, config: config) {
+            return (cached, cached.warnings, true)
+        }
+        let url = await store.videoURL(session: session, video: video)
+        let result = await WallPlateBuilder().build(url: url, pose: pose, config: config)
+        if let plate = result.plate {
+            try? await store.cachePlate(plate, session: session, video: video, config: config)
+        }
+        return (result.plate, result.warnings, false)
     }
 
     func align(

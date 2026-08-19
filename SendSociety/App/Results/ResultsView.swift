@@ -85,7 +85,11 @@ struct ResultsView: View {
                         .padding(.horizontal)
 
                         if mode == .skeletonOnly || mode == .skeletonOverlay {
-                            OverlayToggles(overlays: $overlays, showsDivergence: mode == .skeletonOnly)
+                            OverlayToggles(
+                                overlays: $overlays,
+                                showsDivergence: mode == .skeletonOnly,
+                                showsBackdrop: mode == .skeletonOnly && processed.wallPlate != nil
+                            )
                                 .padding(.horizontal)
                         }
 
@@ -153,7 +157,8 @@ struct ResultsView: View {
                 referenceScale: processed.referenceScale,
                 attemptScale: processed.attemptScale,
                 route: processed.route,
-                overlays: overlays
+                overlays: overlays,
+                wallPlate: processed.wallPlate?.image
             )
         case .skeleton3D:
             Skeleton3DComparisonView(
@@ -562,6 +567,10 @@ struct OverlayToggles: View {
     /// something on one shared diagram. In skeleton-overlay mode each climber
     /// is on their own footage, so there is no line to draw between them.
     var showsDivergence = true
+    /// Off when there is no plate to show — a toggle for a picture that does
+    /// not exist reads as a broken toggle. The stage report says why it is
+    /// missing.
+    var showsBackdrop = true
 
     var body: some View {
         ViewThatFits {
@@ -570,6 +579,7 @@ struct OverlayToggles: View {
                 Toggle("BOS", isOn: $overlays.baseOfSupport)
                 Toggle("Load", isOn: $overlays.limbLoad)
                 if showsDivergence { Toggle("Diff", isOn: $overlays.divergenceVectors) }
+                if showsBackdrop { Toggle("Wall", isOn: $overlays.wallBackdrop) }
             }
             .toggleStyle(.button)
             .font(.caption)
@@ -579,8 +589,18 @@ struct OverlayToggles: View {
                 Toggle("Base of support", isOn: $overlays.baseOfSupport)
                 Toggle("Limb load", isOn: $overlays.limbLoad)
                 if showsDivergence { Toggle("Divergence", isOn: $overlays.divergenceVectors) }
+                if showsBackdrop { Toggle("Wall backdrop", isOn: $overlays.wallBackdrop) }
             }
             .font(.caption)
+        }
+
+        if showsBackdrop, overlays.wallBackdrop {
+            HStack {
+                Text("Wash").font(.caption2).foregroundStyle(.secondary)
+                Slider(value: $overlays.wallWash, in: 0 ... 1)
+                Text(String(format: "%.0f%%", overlays.wallWash * 100))
+                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            }
         }
 
         // A three-state marker nobody can read is a two-state marker plus

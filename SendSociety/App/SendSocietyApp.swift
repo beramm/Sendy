@@ -21,7 +21,15 @@ struct SendSocietyApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    /// Set once, when onboarding finishes, and never cleared by the app.
+    ///
+    /// `UserDefaults` lives in the app's container, so this survives relaunches
+    /// and app updates and goes away only when the app is deleted — which is
+    /// exactly "show it on first install and never again".
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    /// Covers the gap between finishing onboarding and `@AppStorage` publishing
+    /// the write, and keeps `--show-onboarding` from looping straight back into
+    /// the flow it just finished.
     @State private var completedOnboardingThisLaunch = false
 
     var body: some View {
@@ -50,6 +58,8 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: shouldShowOnboarding)
     }
 
+    /// First install only. The debug override is opt-in — see
+    /// `OnboardingConfiguration.alwaysShowOnLaunch`.
     private var shouldShowOnboarding: Bool {
         guard !completedOnboardingThisLaunch else { return false }
         return OnboardingConfiguration.alwaysShowOnLaunch || !hasCompletedOnboarding
