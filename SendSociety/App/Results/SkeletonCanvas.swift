@@ -12,10 +12,18 @@ struct AnalyticalOverlays: Equatable {
     var limbLoad = true
     var divergenceVectors = false
     var holds = true
+    /// The wall the route was derived from, behind the skeletons. Off gives
+    /// back the plain diagram, which is easier to read and tells you nothing
+    /// about whether a hold landed where a hold is.
+    var wallBackdrop = true
+    /// How far the backdrop is washed out before the skeletons go on top. A
+    /// busy spray wall needs more of this than a plain one, and which it is
+    /// only becomes clear on site — hence a control rather than a constant.
+    var wallWash: Double = 0.45
 
     static let none = AnalyticalOverlays(
         centreOfMass: false, baseOfSupport: false, limbLoad: false,
-        divergenceVectors: false, holds: false
+        divergenceVectors: false, holds: false, wallBackdrop: false
     )
 }
 
@@ -48,6 +56,11 @@ struct SkeletonCanvas: View {
     /// Off when the canvas is drawn over footage, where the video is the
     /// background and a wash over it hides the climber.
     var drawsBackground = true
+    /// The wall with the climber removed, in this canvas's own coordinates —
+    /// wall space is the reference clip's image space, so it needs no
+    /// transform. Nil falls back to the plain diagram; it is a backdrop and no
+    /// number on this canvas is derived from it.
+    var wallPlate: CGImage?
     /// Overrides the colour of the climber in the `reference` slot.
     ///
     /// Skeleton-overlay mode draws one climber per pane and passes whichever
@@ -73,6 +86,17 @@ struct SkeletonCanvas: View {
             let rect = CGRect(origin: .zero, size: size)
             if drawsBackground {
                 context.fill(Path(rect), with: .color(.gray.opacity(0.12)))
+            }
+            // The plate is drawn in the same normalized frame as everything
+            // else on this canvas, so it stretches to the full rect rather than
+            // being letterboxed — a hold at (0.5, 0.5) must land on the wall
+            // pixel at (0.5, 0.5), which is the entire point of showing it.
+            if let wallPlate, overlays.wallBackdrop {
+                context.draw(Image(decorative: wallPlate, scale: 1), in: rect)
+                context.fill(
+                    Path(rect),
+                    with: .color(Color(.systemBackground).opacity(max(0, min(1, overlays.wallWash))))
+                )
             }
 
             if overlays.holds, let route {
@@ -134,7 +158,7 @@ struct SkeletonCanvas: View {
         // is the wall diagram's ground; this one is the view's. Skipping only
         // the first left an opaque card painted straight over the video, so
         // skeleton-overlay mode rendered as skeletons on nothing.
-        .background(drawsBackground ? Color(white: 0.96) : Color.clear)
+        .background(drawsBackground ? Color(.secondarySystemBackground) : Color.clear)
     }
 
     // MARK: Drawing
@@ -332,14 +356,15 @@ struct SkeletonOverlayPane: View {
                         referenceMetrics: metrics,
                         referenceScale: scale,
                         route: nil,
-                        // Holds are forced off here whatever the toggle says:
-                        // the wall is in the picture already.
+                        // Holds and the backdrop are forced off here whatever
+                        // the toggles say: the wall is in the picture already.
                         overlays: AnalyticalOverlays(
                             centreOfMass: overlays.centreOfMass,
                             baseOfSupport: overlays.baseOfSupport,
                             limbLoad: overlays.limbLoad,
                             divergenceVectors: false,
-                            holds: false
+                            holds: false,
+                            wallBackdrop: false
                         ),
                         // A video cannot be rescaled without distorting it, so
                         // the skeleton is drawn where the joints actually are.

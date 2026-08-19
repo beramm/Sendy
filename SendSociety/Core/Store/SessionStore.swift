@@ -1,4 +1,7 @@
 import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 
 /// On-disk layout for one session:
 ///
@@ -8,6 +11,7 @@ import Foundation
 ///   videos/<video-uuid>.mov
 ///   poses/<video-uuid>.json      ← the pose cache
 ///   poses3d/<video-uuid>.json    ← visualization-only 3D pose cache
+///   plates/<video-uuid>-<key>.png ← the wall backdrop
 /// ```
 ///
 /// Sessions are one-off — there is no library and no cross-session
@@ -66,6 +70,25 @@ public actor SessionStore {
     public func pose3DURL(session: ClimbSession, video: VideoRef) -> URL {
         directory(for: session.id).appendingPathComponent("poses3d", isDirectory: true)
             .appendingPathComponent("\(video.id.uuidString).json")
+    }
+
+    /// **Keyed by the plate's own tuning fields, not by the whole config.**
+    ///
+    /// The plate depends on the video, the sample count, the mask padding and
+    /// the output size — and on nothing else in `TuningConfig`. Keying on the
+    /// whole config would rebuild it every time a contact threshold moved,
+    /// which is most of what the tuning loop does; keying on the video alone
+    /// would silently serve a stale plate after the padding was raised to cover
+    /// a climber's hands.
+    func platePrefix(video: VideoRef) -> String { video.id.uuidString }
+
+    func plateKey(config: TuningConfig) -> String {
+        "s\(config.wallPlateSampleCount)-p\(Int((config.wallPlateMaskPadding * 1000).rounded()))-d\(config.wallPlateMaxDimension)"
+    }
+
+    func plateURL(session: ClimbSession, video: VideoRef, config: TuningConfig, extension ext: String) -> URL {
+        directory(for: session.id).appendingPathComponent("plates", isDirectory: true)
+            .appendingPathComponent("\(platePrefix(video: video))-\(plateKey(config: config)).\(ext)")
     }
 
     // MARK: Sessions
@@ -132,6 +155,14 @@ public actor SessionStore {
             try? FileManager.default.removeItem(at: poseURL(session: session, video: video, source: source))
         }
         try? FileManager.default.removeItem(at: pose3DURL(session: session, video: video))
+        // Plates are keyed by tuning as well as by video, so there may be
+        // several. Sweep the directory by prefix rather than guessing keys.
+        let plates = directory(for: session.id).appendingPathComponent("plates", isDirectory: true)
+        let prefix = platePrefix(video: video)
+        let contents = (try? FileManager.default.contentsOfDirectory(at: plates, includingPropertiesForKeys: nil)) ?? []
+        for url in contents where url.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     // MARK: Pose cache (task 1.2c / 4.8)
@@ -189,6 +220,51 @@ public actor SessionStore {
             }
         }
         return out
+    }
+
+    // MARK: Wall backdrop cache (task 10.3)
+
+    /// Sidecar for the plate PNG. The coverage figure has to survive a cache
+    /// hit — a stage that reports "97% covered" on the first run and nothing on
+    /// the second is a harness you cannot read.
+    struct PlateRecord: Codable, Sendable {
+        var coverage: Double
+        var sampleCount: Int
+        var warnings: [String]
+    }
+
+    public func cachedPlate(session: ClimbSession, video: VideoRef, config: TuningConfig) -> WallPlate? {
+        let imageURL = plateURL(session: session, video: video, config: config, extension: "png")
+        guard let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let recordURL = plateURL(session: session, video: video, config: config, extension: "json")
+        let record = (try? Data(contentsOf: recordURL)).flatMap { try? JSONDecoder().decode(PlateRecord.self, from: $0) }
+        return WallPlate(
+            image: image,
+            coverage: record?.coverage ?? 1,
+            sampleCount: record?.sampleCount ?? 0,
+            warnings: record?.warnings ?? []
+        )
+    }
+
+    public func cachePlate(_ plate: WallPlate, session: ClimbSession, video: VideoRef, config: TuningConfig) throws {
+        let imageURL = plateURL(session: session, video: video, config: config, extension: "png")
+        try FileManager.default.createDirectory(at: imageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let destination = CGImageDestinationCreateWithURL(imageURL as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw StoreError.ioFailed("Could not write the wall backdrop.")
+        }
+        CGImageDestinationAddImage(destination, plate.image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw StoreError.ioFailed("Could not encode the wall backdrop.")
+        }
+        let record = PlateRecord(coverage: plate.coverage, sampleCount: plate.sampleCount, warnings: plate.warnings)
+        try JSONEncoder().encode(record).write(
+            to: plateURL(session: session, video: video, config: config, extension: "json"), options: .atomic
+        )
+    }
+
+    public func hasCachedPlate(session: ClimbSession, video: VideoRef, config: TuningConfig) -> Bool {
+        FileManager.default.fileExists(atPath: plateURL(session: session, video: video, config: config, extension: "png").path)
     }
 
     // MARK: Saved tuning configs

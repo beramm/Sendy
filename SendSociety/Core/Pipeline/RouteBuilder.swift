@@ -15,32 +15,20 @@ public struct RouteBuilder: Sendable {
             return Route(holds: [], warnings: ["No contacts on the reference climb, so no route could be derived."])
         }
 
-        let labels = dbscan(
-            points: contacts.map(\.position),
-            epsilon: config.holdClusterEpsilon,
-            minPoints: config.holdClusterMinPoints,
-            scale: scale
-        )
-
-        var groups: [Int: [Contact]] = [:]
-        var noise: [Contact] = []
-        for (i, label) in labels.enumerated() {
-            if label >= 0 { groups[label, default: []].append(contacts[i]) }
-            else { noise.append(contacts[i]) }
+        var warnings: [String] = []
+        let (climbing, floorCount) = Self.dropFloorContacts(contacts, scale: scale, config: config)
+        if floorCount > 0 {
+            warnings.append(
+                "\(floorCount) foot contact\(floorCount == 1 ? "" : "s") on the floor "
+                + "\(floorCount == 1 ? "was" : "were") left out of the route. "
+                + "The mat is not a hold; lower the ground margin if this route genuinely starts that low."
+            )
+        }
+        guard !climbing.isEmpty else {
+            return Route(holds: [], warnings: warnings + ["Every contact on the reference climb was on the floor, so no route could be derived."])
         }
 
-        // Noise contacts become single-contact holds rather than vanishing.
-        // Fail soft: an isolated touch is weak evidence of a hold, but it is
-        // better evidence than silence.
-        var nextLabel = (groups.keys.max() ?? -1) + 1
-        for c in noise {
-            groups[nextLabel] = [c]
-            nextLabel += 1
-        }
-
-        // Sorted by cluster label first so `Dictionary`'s randomised iteration
-        // order cannot leak into hold ids, then ordered by first touch.
-        var clusters: [[Contact]] = groups.keys.sorted().map { groups[$0]! }
+        var clusters = Self.cluster(climbing, radius: config.holdClusterEpsilon, scale: scale)
         clusters.sort { (a, b) in
             let firstA = a.min(by: Contact.deterministicOrder)!
             let firstB = b.min(by: Contact.deterministicOrder)!
@@ -66,61 +54,121 @@ public struct RouteBuilder: Sendable {
             ))
         }
 
-        var warnings: [String] = []
         if holds.count < config.minPlausibleHolds {
             warnings.append("Only \(holds.count) holds derived — contact detection probably under-fired. Lower the dwell frames or raise the velocity threshold.")
         }
         if holds.count > config.maxPlausibleHolds {
-            warnings.append("\(holds.count) holds derived, which is implausible for one route — raise the cluster epsilon or the contact merge radius.")
+            warnings.append("\(holds.count) holds derived, which is implausible for one route — raise the cluster radius or the contact merge radius.")
         }
         if holds.filter(\.isHandHold).count < 2 {
             warnings.append("Fewer than two hand holds derived, so the climb cannot be split into moves.")
         }
-        if !noise.isEmpty {
-            warnings.append("\(noise.count) isolated contacts became single-touch holds.")
+        let singles = holds.filter { $0.contactCount == 1 }.count
+        if singles > 0 {
+            // Kept, not dropped: the reference climber touches some holds
+            // exactly once, and a foot placed once is still a foothold. Said
+            // out loud because it is also what a stray contact looks like.
+            warnings.append("\(singles) hold\(singles == 1 ? " was" : "s were") touched exactly once.")
         }
         return Route(holds: holds, warnings: warnings)
     }
 
-    /// DBSCAN. Returns a cluster label per point, `-1` for noise.
-    ///
-    /// Chosen over k-means because the number of holds is exactly the thing we
-    /// don't know, and over hierarchical clustering because a wall-width radius
-    /// is a parameter that means something physical and can be tuned on site.
-    func dbscan(points: [Point2D], epsilon: Double, minPoints: Int, scale: ClimbScale) -> [Int] {
-        var labels = [Int](repeating: -2, count: points.count)   // -2 = unvisited
-        var cluster = 0
+    // MARK: Clustering
 
-        func neighbours(_ i: Int) -> [Int] {
-            points.indices.filter { scale.distance(points[i], points[$0]) <= epsilon }
+    /// Contacts made on the floor, dropped before anything is clustered.
+    ///
+    /// A climber stands on the mat arranging themselves before pulling on, and
+    /// lands back on it afterwards. Those are foot contacts like any other and
+    /// they clustered into holds at the bottom of the route — three of them on
+    /// `gym-testing/test1`, sitting on the mat in the rendered overlay.
+    ///
+    /// The floor is read from the data rather than assumed: the lowest foot
+    /// contact plus `groundMargin`. Guarded so it can never empty the route —
+    /// if every foot contact is on the line, the line is wrong and nothing is
+    /// dropped.
+    static func dropFloorContacts(
+        _ contacts: [Contact], scale: ClimbScale, config: TuningConfig
+    ) -> (kept: [Contact], dropped: Int) {
+        guard config.groundMargin > 0 else { return (contacts, 0) }
+        let feet = contacts.filter(\.isFoot)
+        guard let floor = feet.map(\.position.y).min() else { return (contacts, 0) }
+        let line = floor + config.groundMargin * scale.torsoLength
+        let onFloor = feet.filter { $0.position.y <= line }
+        guard !onFloor.isEmpty, onFloor.count < feet.count else { return (contacts, 0) }
+        let ids = Set(onFloor.map(\.id))
+        return (contacts.filter { !ids.contains($0.id) }, onFloor.count)
+    }
+
+    /// Groups contacts into holds by **agglomerative complete-linkage**, capped
+    /// at a hold-sized diameter.
+    ///
+    /// This replaced DBSCAN, which was wrong in a way that only showed up once
+    /// the wall was drawn behind the route. With `minPoints` at 1 every contact
+    /// is a core point, so DBSCAN degenerates to single linkage: clusters grow
+    /// by transitive closure and nothing bounds how far they reach. On
+    /// `gym-testing/test1` that produced four "holds" whose contacts spanned
+    /// 1.0–1.2 body-lengths — a region covering several real holds — while
+    /// isolated touches stayed separate. Both failures at once, and no value of
+    /// the radius fixes both: raising it chains harder, lowering it splinters.
+    ///
+    /// Complete linkage bounds the **diameter** instead of the link, which is
+    /// the physical fact being modelled: a hold is a bounded object, and two
+    /// contacts a body-length apart are not on it however many contacts lie
+    /// between them. `radius` is that object's radius, so the cap is `2 ×
+    /// radius`.
+    ///
+    /// O(n³) in the worst case, on the order of a hundred contacts. Not worth
+    /// optimising.
+    static func cluster(_ contacts: [Contact], radius: Double, scale: ClimbScale) -> [[Contact]] {
+        guard contacts.count > 1 else { return contacts.map { [$0] } }
+        let diameter = max(0, radius) * 2
+
+        // Distances are symmetric and reused every merge round.
+        let n = contacts.count
+        var distance = [[Double]](repeating: [Double](repeating: 0, count: n), count: n)
+        for i in 0 ..< n {
+            for j in (i + 1) ..< n {
+                let d = scale.distance(contacts[i].position, contacts[j].position)
+                distance[i][j] = d
+                distance[j][i] = d
+            }
         }
 
-        for i in points.indices {
-            guard labels[i] == -2 else { continue }
-            var seeds = neighbours(i)
-            if seeds.count < minPoints {
-                labels[i] = -1
-                continue
+        var groups: [[Int]] = (0 ..< n).map { [$0] }
+
+        /// Complete-linkage distance: the diameter the merged cluster would have.
+        ///
+        /// Time is deliberately *not* consulted here. Forbidding a limb's
+        /// consecutive contacts from merging — on the theory that it must have
+        /// moved between them — was tried and is wrong on real footage: it
+        /// takes the reference pair from 18 holds to 32 and from 11 hand holds
+        /// to 19, against 8–11 hand moves by eye. A limb adjusting on a hold
+        /// beyond `contactMergeRadius` is common, and it is not a move.
+        func linkage(_ a: [Int], _ b: [Int]) -> Double {
+            var worst = 0.0
+            for i in a {
+                for j in b { worst = max(worst, distance[i][j]) }
             }
-            labels[i] = cluster
-            var queue = seeds.filter { $0 != i }
-            var head = 0
-            while head < queue.count {
-                let j = queue[head]
-                head += 1
-                if labels[j] == -1 { labels[j] = cluster }
-                guard labels[j] == -2 else { continue }
-                labels[j] = cluster
-                let jn = neighbours(j)
-                if jn.count >= minPoints {
-                    for k in jn where labels[k] == -2 || labels[k] == -1 {
-                        if !queue.contains(k) { queue.append(k) }
-                    }
+            return worst
+        }
+
+        while groups.count > 1 {
+            var best = Double.infinity
+            var pair: (Int, Int)?
+            for i in 0 ..< groups.count {
+                for j in (i + 1) ..< groups.count {
+                    let d = linkage(groups[i], groups[j])
+                    // Strictly less keeps the first pair on a tie, and the
+                    // groups are in a deterministic order, so equal-distance
+                    // merges resolve the same way on every run.
+                    if d < best { best = d; pair = (i, j) }
                 }
             }
-            seeds.removeAll()
-            cluster += 1
+            guard let (i, j) = pair, best <= diameter else { break }
+            groups[i].append(contentsOf: groups[j])
+            groups.remove(at: j)
         }
-        return labels
+
+        return groups.map { $0.map { contacts[$0] } }
     }
 }

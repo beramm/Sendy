@@ -171,7 +171,7 @@ struct ContactRouteTests {
     }
 
     @Test("Distinct holds do not merge into one cluster")
-    func dbscanSeparates() {
+    func clusteringSeparates() {
         let scale = ClimbScale(iso: .square, torsoLength: 0.1)
         var config = TuningConfig()
         config.holdClusterEpsilon = 0.5      // 0.05 wall units
@@ -184,6 +184,81 @@ struct ContactRouteTests {
         #expect(route.holds.count == 2)
         #expect(route.holds[0].firstFrame == 0)
         #expect(route.holds[1].firstFrame == 40)
+    }
+
+    /// The failure that replaced DBSCAN. Under single linkage — which is what
+    /// DBSCAN with a min-points of 1 is — a line of contacts each within the
+    /// radius of the next collapses into one cluster of unbounded size, and on
+    /// the real fixture that produced "holds" spanning 1.2 body-lengths.
+    @Test("A chain of near contacts does not become one giant hold")
+    func clusteringDoesNotChain() {
+        let scale = ClimbScale(iso: .square, torsoLength: 0.1)
+        var config = TuningConfig()
+        config.holdClusterEpsilon = 0.30           // diameter 0.6 BL = 0.06 wall units
+        config.groundMargin = 0                   // not what this test is about
+        // Five contacts in a line, each 0.5 BL from the next: every neighbouring
+        // pair links, the two ends are 2 BL apart.
+        let contacts = (0 ..< 5).map { i in
+            Contact(
+                joint: .leftWrist, startFrame: i * 20, endFrame: i * 20 + 10,
+                position: Point2D(x: 0.20 + Double(i) * 0.05, y: 0.5), confidence: 0.9
+            )
+        }
+        let route = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+
+        // Single linkage returns 1: every point is within the radius of its
+        // neighbour, so the chain closes. Complete linkage merges only what
+        // stays inside the diameter, so the ends never join — here that is
+        // pairs, leaving 3.
+        #expect(route.holds.count == 3, "single linkage would return 1")
+        for hold in route.holds {
+            #expect(hold.contactCount <= 2)
+        }
+
+        // The invariant that matters, stated directly: nothing derived as one
+        // hold spans more than a hold.
+        for hold in route.holds {
+            let members = contacts.filter { scale.distance($0.position, hold.position) <= config.holdClusterEpsilon }
+            for a in members {
+                for b in members {
+                    #expect(scale.distance(a.position, b.position) <= config.holdClusterEpsilon * 2 + 1e-9)
+                }
+            }
+        }
+    }
+
+    @Test("The mat is not a hold")
+    func floorContactsAreNotHolds() {
+        let scale = ClimbScale(iso: .square, torsoLength: 0.1)
+        let config = TuningConfig()
+        // Two feet on the ground while the climber sets up, then a real climb.
+        let contacts = [
+            Contact(joint: .leftAnkle, startFrame: 0, endFrame: 20, position: Point2D(x: 0.40, y: 0.02), confidence: 0.9),
+            Contact(joint: .rightAnkle, startFrame: 5, endFrame: 25, position: Point2D(x: 0.50, y: 0.03), confidence: 0.9),
+            Contact(joint: .leftAnkle, startFrame: 60, endFrame: 90, position: Point2D(x: 0.45, y: 0.30), confidence: 0.9),
+            Contact(joint: .leftWrist, startFrame: 40, endFrame: 70, position: Point2D(x: 0.45, y: 0.60), confidence: 0.9),
+            Contact(joint: .rightWrist, startFrame: 80, endFrame: 110, position: Point2D(x: 0.55, y: 0.75), confidence: 0.9)
+        ]
+        let route = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+        #expect(route.holds.count == 3)
+        #expect(route.holds.allSatisfy { $0.position.y > 0.1 })
+        #expect(route.warnings.contains { $0.contains("floor") })
+    }
+
+    /// The guard on the floor rule. The floor line is the lowest foot contact
+    /// plus a margin, so a climb whose every foothold sits inside that margin
+    /// would otherwise lose all of them and derive a route with no feet.
+    @Test("The floor rule never empties the route")
+    func floorRuleIsGuarded() {
+        let scale = ClimbScale(iso: .square, torsoLength: 0.1)
+        let config = TuningConfig()
+        let contacts = [
+            Contact(joint: .leftAnkle, startFrame: 0, endFrame: 20, position: Point2D(x: 0.40, y: 0.20), confidence: 0.9),
+            Contact(joint: .rightAnkle, startFrame: 5, endFrame: 25, position: Point2D(x: 0.50, y: 0.21), confidence: 0.9),
+            Contact(joint: .leftWrist, startFrame: 40, endFrame: 70, position: Point2D(x: 0.45, y: 0.60), confidence: 0.9)
+        ]
+        let route = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+        #expect(route.footHolds.count > 0, "both feet are within the margin of each other, so neither is the floor")
     }
 
     @Test("An implausible hold count is surfaced, not swallowed")

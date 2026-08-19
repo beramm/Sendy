@@ -346,6 +346,37 @@ public struct VideoFrameSource: Sendable {
         try await Self.image(url: url, seconds: seconds, maximumSize: maximumSize)
     }
 
+    /// Several frames from one clip in a single pass.
+    ///
+    /// One generator for the whole batch rather than one per frame: the clean
+    /// plate needs ~16 frames, and building 16 generators over the same asset
+    /// re-reads its index 16 times. Results are keyed by the **requested**
+    /// seconds, since the generator is free to return them out of order and to
+    /// land on a nearby frame.
+    ///
+    /// Frames that fail are simply absent from the result — a clip with a bad
+    /// frame still produces a plate from the rest of it.
+    public static func images(url: URL, seconds: [Double], maximumSize: CGSize) async -> [Double: CGImage] {
+        guard !seconds.isEmpty else { return [:] }
+        nonisolated(unsafe) let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 60)
+        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 60)
+        generator.maximumSize = maximumSize
+
+        let times = seconds.map { CMTime(seconds: $0, preferredTimescale: 600) }
+        var byRequestedValue: [Int64: Double] = [:]
+        for (time, second) in zip(times, seconds) { byRequestedValue[time.value] = second }
+
+        var images: [Double: CGImage] = [:]
+        for await result in generator.images(for: times) {
+            guard let image = try? result.image,
+                  let second = byRequestedValue[result.requestedTime.value] else { continue }
+            images[second] = image
+        }
+        return images
+    }
+
     public static func image(url: URL, seconds: Double, maximumSize: CGSize) async throws -> CGImage {
         nonisolated(unsafe) let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.appliesPreferredTrackTransform = true

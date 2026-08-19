@@ -377,7 +377,22 @@ struct GoldenMetricsTests {
         let scale = ClimbScale(sequence: sequence)
         let config = TuningConfig()
         let contacts = ContactDetector().detect(sequence, scale: scale, config: config).contacts
-        let route = RouteBuilder().build(contacts: contacts, scale: scale, config: config)
+
+        // **This fixture is not shaped like a real climb, and the route stage
+        // is configured for it explicitly rather than by default.**
+        //
+        // Its holds sit 0.5 body-lengths apart — a 25cm reach, where a real
+        // move is 1–1.6 — and its feet start on the ground plane because it has
+        // no mat. The shipped defaults are tuned for real footage: a hold
+        // radius of 0.45 would fold two of these holds into one, and the floor
+        // rule would read the starting foot positions as the mat they look
+        // like. Neither is a defect in the defaults, and neither is what this
+        // test measures — it measures **metric** drift, which needs the same
+        // holds and the same sections it was frozen against.
+        var routeConfig = config
+        routeConfig.holdClusterEpsilon = 0.20
+        routeConfig.groundMargin = 0
+        let route = RouteBuilder().build(contacts: contacts, scale: scale, config: routeConfig)
         let match = RouteMatcher().match(contacts: contacts, to: route, scale: scale, config: config)
         let segmentation = SectionSegmenter().segment(
             route: route, reference: match, attempt: match,
