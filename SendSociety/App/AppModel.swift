@@ -3,13 +3,13 @@ import SwiftUI
 import Observation
 import PhotosUI
 
-/// Which of the three comparison views is on screen.
+/// Which comparison view is on screen.
 ///
 /// **View-layer only.** Switching modes must not re-run a single pipeline
-/// stage — everything all three modes need is already in `ProcessedSession`.
+/// stage — everything every mode needs is already in `ProcessedSession`.
 ///
 /// The alpha-composited `overlay` mode was removed rather than kept as a
-/// fourth tab. Its known weakness was recorded in `plan.md` from the start —
+/// further tab. Its known weakness was recorded in `plan.md` from the start —
 /// two differently-sized bodies superimposed read as clutter, because the wall
 /// lines up and the humans do not — and `skeletonOverlay` covers the question
 /// it was actually being used for: whether the tracker is seeing the climber.
@@ -17,6 +17,7 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
     case sideBySide
     case skeletonOverlay
     case skeletonOnly
+    case skeleton3D
 
     var id: String { rawValue }
 
@@ -25,6 +26,7 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
         case .sideBySide: "Side by side"
         case .skeletonOverlay: "Skeleton overlay"
         case .skeletonOnly: "Skeleton"
+        case .skeleton3D: "Skeleton 3D"
         }
     }
 }
