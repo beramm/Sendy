@@ -27,16 +27,19 @@ struct ResultsView: View {
     @State private var showWarnings = false
 
     var body: some View {
-        Group {
-            if let processed = model.processed {
-                content(processed)
-            } else {
+        ZStack {
+            AppBackground()
+            Group {
+                if let processed = model.processed {
+                    content(processed)
+                } else {
                 // Fail soft: never a blank screen.
                 List {
                     SwiftUI.Section("Nothing processed yet") {
                         Text("Run the pipeline to see results.")
                         Button("Process") { model.process() }
                     }
+                }
                 }
             }
         }

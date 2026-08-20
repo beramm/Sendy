@@ -7,8 +7,8 @@ struct BetterClimberOnboardingPage: View {
         IllustratedOnboardingPage(
             lines: [
                 .init("FIND A", color: .white),
-                .init("BETTER", color: OnboardingPalette.accent),
-                .init("CLIMBER", color: OnboardingPalette.accent)
+                .init("BETTER", color: AppTheme.accent),
+                .init("CLIMBER", color: AppTheme.accent)
             ],
             headlineOffset: CGPoint(x: 44, y: 102),
             imageName: "BetterClimberIllustration",

@@ -13,7 +13,7 @@ struct AlignRouteOnboardingPage: View {
                     OnboardingHeadline(
                         lines: [
                             .init("ALIGN THE", color: .white),
-                            .init("ROUTE!", color: OnboardingPalette.accent)
+                            .init("ROUTE!", color: AppTheme.accent)
                         ]
                     )
                     .offset(x: 49, y: 83)
@@ -28,7 +28,7 @@ struct AlignRouteOnboardingPage: View {
 
                         Text(motion.isAligned ? "Locked" : "Tilt To Match")
                             .font(.system(size: 16, weight: .bold, design: .monospaced))
-                            .foregroundStyle(motion.isAligned ? OnboardingPalette.accent : .white)
+                            .foregroundStyle(motion.isAligned ? AppTheme.accent : .white)
                             .rotationEffect(.degrees(-5))
                             .offset(x: 240, y: 430)
                     }
@@ -71,7 +71,7 @@ struct AlignRouteOnboardingPage: View {
             .renderingMode(.template)
             .resizable()
             .scaledToFit()
-            .foregroundStyle(OnboardingPalette.target)
+            .foregroundStyle(AppTheme.target)
             .frame(width: 344, height: 547)
             .accessibilityHidden(true)
     }

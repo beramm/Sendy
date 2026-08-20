@@ -52,6 +52,7 @@ enum ClipImportState: Equatable {
 /// that nothing ever needs to address by value.
 enum AppRoute: Hashable {
     case setup
+    case processing
     case results
     /// Stage timings, statuses and warnings. **Not in the main flow** — the
     /// pipeline runs from the clips screen and lands on results. This is the
@@ -91,6 +92,16 @@ final class AppModel {
     init() {
         Task { await refresh() }
     }
+
+#if DEBUG
+    /// In-memory state for SwiftUI previews. It intentionally bypasses the
+    /// store refresh so preview fixtures never race with on-disk sessions.
+    init(previewSession: ClimbSession? = nil, previewSessions: [ClimbSession] = []) {
+        session = previewSession
+        sessions = previewSessions
+        if let previewSession { config = previewSession.config }
+    }
+#endif
 
     // MARK: Readiness
 

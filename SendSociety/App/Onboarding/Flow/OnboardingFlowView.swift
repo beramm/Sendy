@@ -37,7 +37,7 @@ enum OnboardingConfiguration {
     ///
     ///     xcrun simctl launch <device> <bundle-id> --show-onboarding
 #if DEBUG
-    static let alwaysShowOnLaunch = ProcessInfo.processInfo.arguments.contains("--show-onboarding")
+    static let alwaysShowOnLaunch = true
 #else
     static let alwaysShowOnLaunch = false
 #endif
@@ -93,7 +93,7 @@ struct OnboardingFlowView: View {
 
     var body: some View {
         ZStack {
-            OnboardingBackground()
+            AppBackground()
 
             page
                 .id(step)
