@@ -8,8 +8,8 @@ struct SetupOnboardingPage: View {
             lines: [
                 .init("PREPARE", color: .white),
                 .init("YOUR", color: .white),
-                .init("TRUSTY", color: OnboardingPalette.accent),
-                .init("TRIPOD!", color: OnboardingPalette.accent)
+                .init("TRUSTY", color: AppTheme.accent),
+                .init("TRIPOD!", color: AppTheme.accent)
             ],
             headlineOffset: CGPoint(x: 53, y: 73),
             imageName: "TripodSetupIllustration",

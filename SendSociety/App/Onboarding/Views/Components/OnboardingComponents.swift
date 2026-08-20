@@ -1,11 +1,5 @@
 import SwiftUI
 
-enum OnboardingPalette {
-    static let accent = Color(red: 188 / 255, green: 247 / 255, blue: 0)
-    static let background = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
-    static let target = Color(red: 74 / 255, green: 96 / 255, blue: 7 / 255)
-}
-
 struct OnboardingHeadlineLine {
     let text: String
     let color: Color
@@ -28,29 +22,10 @@ struct OnboardingHeadline: View {
                     .lineLimit(1)
             }
         }
-        .font(.system(size: 48, weight: .medium, design: .monospaced))
+        // .largeTitle scales with the user's Dynamic Type setting instead of
+        // locking every device/user to a 48pt headline.
+        .font(.system(.largeTitle, design: .monospaced).weight(.medium))
         .tracking(-1.2)
-    }
-}
-
-/// A centered, edge-to-edge background shared by the live onboarding flow and
-/// every page preview. `scaledToFill` keeps the wall pattern covering screens
-/// with aspect ratios that differ from the 402 × 874 reference artwork.
-struct OnboardingBackground: View {
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                OnboardingPalette.background
-
-                Image("WallDots")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-                    .accessibilityHidden(true)
-            }
-        }
-        .ignoresSafeArea()
     }
 }
 
@@ -65,12 +40,18 @@ struct OnboardingButton: View {
             action()
         } label: {
             Text(title)
-                .font(.system(size: 24, weight: .black, design: .default))
-                .foregroundStyle(OnboardingPalette.background)
+                // .title2 instead of a fixed 24pt so the label grows with
+                // the user's preferred text size.
+                .font(.system(.title2, weight: .black))
+                .foregroundStyle(AppTheme.background)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .frame(width: 313, height: 59)
-                .background(OnboardingPalette.accent, in: Capsule())
+                // minWidth/minHeight (rather than a fixed frame) preserve the
+                // designed footprint at the default text size while still
+                // letting the capsule grow for larger accessibility sizes.
+                .padding(.horizontal, 24)
+                .frame(minWidth: 313, minHeight: 59)
+                .background(AppTheme.accent, in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityHint(enabled ? "" : "Align the route first")
@@ -280,7 +261,7 @@ struct OnboardingPreviewContainer<Content: View>: View {
 
     var body: some View {
         ZStack {
-            OnboardingBackground()
+            AppBackground()
             content()
         }
         .preferredColorScheme(.dark)

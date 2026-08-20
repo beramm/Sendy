@@ -15,6 +15,7 @@ struct SendSocietyApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .preferredColorScheme(.dark)
         }
     }
 }
@@ -47,6 +48,7 @@ struct RootView: View {
                         .navigationDestination(for: AppRoute.self) { route in
                             switch route {
                             case .setup: SessionSetupView()
+                            case .processing: ProcessingView()
                             case .results: ResultsView()
                             case .report: PipelineReportView()
                             case .tuning: TuningPanelView()
