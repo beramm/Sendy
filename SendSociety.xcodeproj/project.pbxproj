@@ -251,14 +251,14 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = 89FT575Q4C;
+				DEVELOPMENT_TEAM = 8H23JMG37G;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sendyy;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Records the reference climb and your attempt.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Names a session after the gym you filmed it at. Used for the name only; your clips never leave the device.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed, and reads where a clip was filmed so a session can be named after the gym.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -270,7 +270,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.dzikryaji.sendsociety;
+				PRODUCT_BUNDLE_IDENTIFIER = com.beramm.sendsociety;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -289,14 +289,14 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = 89FT575Q4C;
+				DEVELOPMENT_TEAM = 8H23JMG37G;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Sendyy;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Records the reference climb and your attempt.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Names a session after the gym you filmed it at. Used for the name only; your clips never leave the device.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed, and reads where a clip was filmed so a session can be named after the gym.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -308,7 +308,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.dzikryaji.sendsociety;
+				PRODUCT_BUNDLE_IDENTIFIER = com.beramm.sendsociety;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
