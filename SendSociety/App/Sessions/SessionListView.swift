@@ -19,9 +19,9 @@ struct SessionListView: View {
                     Spacer()
                     if !model.sessions.isEmpty {
                         Button {
-                            let name =
-                            "Climb \(Date().formatted(date: .numeric, time: .omitted))"
-                            Task { await model.newSession(name: name) }
+                            // nil, so the model names it: by date now, and by
+                            // the gym once a located clip lands.
+                            Task { await model.newSession(name: nil) }
                         } label: {
                             Image(systemName: "plus")
                                 .font(.system(size: 24, weight: .medium))
@@ -66,9 +66,9 @@ struct SessionListView: View {
                         .padding(.vertical, 40)
                         
                         Button {
-                            let name =
-                            "Climb \(Date().formatted(date: .numeric, time: .omitted))"
-                            Task { await model.newSession(name: name) }
+                            // nil, so the model names it: by date now, and by
+                            // the gym once a located clip lands.
+                            Task { await model.newSession(name: nil) }
                         } label: {
                             Text("Compare now")
                                 // .title2 instead of a fixed 24pt so the label grows with
