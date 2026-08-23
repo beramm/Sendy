@@ -27,6 +27,7 @@ final class CameraController: NSObject {
 
     var isRunning = false
     var isRecording = false
+    private(set) var isPreparingRecording = false
     var countdown: Int?
     var status: String = ""
     var configurationNotes: [String] = []
@@ -190,11 +191,17 @@ final class CameraController: NSObject {
         }
     }
 
-    /// Hands-free trigger (task 0.0c). Pressing record on a tripod-mounted phone
-    /// risks bumping it, and a bumped tripod is the one thing the homography
-    /// cannot absorb — so recording starts after a countdown, not on touch.
-    func startRecording(afterSeconds delay: Int) async throws -> URL {
+    /// Optional hands-free trigger. A countdown lets the climber move away from
+    /// a tripod-mounted phone without bumping it; zero starts immediately.
+    func startRecording(
+        afterSeconds delay: Int,
+        onRecordingStarted: @MainActor () -> Void = {}
+    ) async throws -> URL {
         guard isRunning else { throw CaptureError.recordingFailed("camera not running") }
+        guard !isPreparingRecording, !isRecording else {
+            throw CaptureError.recordingFailed("recording already starting")
+        }
+        isPreparingRecording = true
 
         // `AVCaptureMovieFileOutput` writes no location of its own, so the
         // recording path has to attach one — otherwise a clip filmed inside the
@@ -218,6 +225,10 @@ final class CameraController: NSObject {
         await location.value
 
         let url = URL.temporaryDirectory.appendingPathComponent("capture-\(UUID().uuidString).mov")
+        // Capture alignment at the same boundary as the movie, not when the
+        // record button was tapped before the countdown.
+        onRecordingStarted()
+        isPreparingRecording = false
         isRecording = true
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation

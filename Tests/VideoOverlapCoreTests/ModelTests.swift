@@ -62,6 +62,47 @@ struct ModelTests {
         #expect(try roundTrip(session) == session)
     }
 
+    @Test("Capture orientation survives a session round-trip")
+    func captureOrientationRoundTrip() throws {
+        let orientation = CaptureOrientation(
+            gravityX: 0.05,
+            gravityY: -0.98,
+            gravityZ: 0.19
+        )
+        var session = ClimbSession(name: "aligned pair")
+        session.reference = VideoRef(
+            filename: "reference.mov",
+            role: .reference,
+            captureOrientation: orientation
+        )
+
+        let decoded = try roundTrip(session)
+        #expect(decoded.reference?.captureOrientation == orientation)
+    }
+
+    @Test("Gravity-derived capture angles use portrait camera level as zero")
+    func captureOrientationAngles() {
+        let level = CaptureOrientation(gravityX: 0, gravityY: -1, gravityZ: 0)
+        #expect(abs(level.rollDegrees) < 1e-9)
+        #expect(abs(level.pitchDegrees) < 1e-9)
+
+        let tilted = CaptureOrientation(gravityX: 0.1, gravityY: -0.98, gravityZ: 0.2)
+        #expect(tilted.rollDegrees > 0)
+        #expect(tilted.pitchDegrees > 0)
+    }
+
+    @Test("Videos saved before capture alignment existed still decode")
+    func oldVideoRefWithoutOrientationDecodes() throws {
+        let original = VideoRef(filename: "old.mov", role: .reference)
+        let encoded = try JSONEncoder().encode(original)
+        var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        object.removeValue(forKey: "captureOrientation")
+        let oldData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(VideoRef.self, from: oldData)
+        #expect(decoded.captureOrientation == nil)
+    }
+
     @Test("Homography inverts and composes")
     func homographyMath() {
         let h = Homography(m: [1.1, 0.05, 0.02, -0.03, 0.95, 0.01, 0.0001, 0.0002, 1])

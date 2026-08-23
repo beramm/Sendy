@@ -53,19 +53,11 @@ struct ProcessingView: View {
         // update is a pop and a push of the same `NavigationStack` in one tick,
         // and the stack can settle on neither — which strands the run on
         // "Comparison ready" with no back button and no way forward.
-        .onChange(of: model.state) { _, _ in advanceWhenReady() }
+        .onChange(of: model.state) { _, _ in model.advanceToResultsIfReady() }
         // Covers the run that finished before this view was on screen: there is
         // no state *change* left to observe in that case, and without this the
         // screen waits for an event that has already happened.
-        .task { advanceWhenReady() }
-    }
-
-    private func advanceWhenReady() {
-        guard model.state == .done, model.processed != nil else { return }
-        var path = model.path.filter { $0 != .processing }
-        if path.last != .results { path.append(.results) }
-        guard path != model.path else { return }
-        model.path = path
+        .task { model.advanceToResultsIfReady() }
     }
 
     private var title: String {

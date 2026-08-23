@@ -3,6 +3,7 @@ import SwiftUI
 import AVFoundation
 import CoreMotion
 import PhotosUI
+import UIKit
 
 struct CaptureView: View {
     @Environment(AppModel.self) private var model
@@ -12,13 +13,18 @@ struct CaptureView: View {
 
     @State private var camera = CameraController()
     @State private var tilt = TiltMonitor()
-    @State private var countdownSeconds = 10
+    @State private var countdownSeconds = 0
     @State private var singleTake = false
     @State private var recordedURL: URL?
     @State private var error: String?
     @State private var libraryItem: PhotosPickerItem?
     @State private var showingSettings = false
     @State private var showsFramingGuide = false
+    @State private var showsAlignmentOverlay = true
+    @State private var alignmentOverlay: CGImage?
+    @State private var isLoadingAlignmentOverlay = false
+    @State private var alignmentSourceLabel: String?
+    @State private var recordedOrientation: CaptureOrientation?
 
     var body: some View {
         ZStack {
@@ -28,13 +34,39 @@ struct CaptureView: View {
                 captureHeader
 
                 ZStack {
-                    CameraPreview(session: camera.session)
+                    CameraPreview(
+                        session: camera.session,
+                        alignmentOverlay: showsAlignmentOverlay ? alignmentOverlay : nil
+                    )
 
                     if showsFramingGuide {
-                        FramingGuide(
-                            rollDegrees: tilt.rollDegrees,
-                            pitchDegrees: tilt.pitchDegrees
-                        )
+                        FramingGuide()
+                    }
+
+                    if isLoadingAlignmentOverlay {
+                        ProgressView("Finding clearest wall frame…")
+                            .tint(.white)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(.black.opacity(0.72), in: .capsule)
+                    }
+
+                    if showsAlignmentOverlay,
+                       let alignmentSourceLabel,
+                       alignmentOverlay != nil {
+                        VStack {
+                            CaptureAlignmentGuide(
+                                sourceLabel: alignmentSourceLabel,
+                                motionAvailable: tilt.isAvailable,
+                                hasMotionReference: tilt.referenceOrientation != nil,
+                                deltaRollDegrees: tilt.deltaRollDegrees,
+                                deltaPitchDegrees: tilt.deltaPitchDegrees
+                            )
+                            .padding(.horizontal, 16)
+                            .padding(.top, 14)
+                            Spacer()
+                        }
                     }
 
                     if let countdown = camera.countdown {
@@ -67,8 +99,9 @@ struct CaptureView: View {
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingSettings) { settingsSheet }
         .task {
-            await camera.start()
             tilt.start()
+            await camera.start()
+            await loadAlignmentTarget()
         }
         .onDisappear {
             camera.stop()
@@ -81,7 +114,10 @@ struct CaptureView: View {
             dismiss()
         }
         .navigationDestination(item: $recordedURL) { url in
-            SingleTakeSplitView(url: url)
+            SingleTakeSplitView(
+                url: url,
+                captureOrientation: recordedOrientation
+            )
         }
     }
 
@@ -140,7 +176,11 @@ struct CaptureView: View {
             Spacer()
 
             Button {
-                camera.isRecording ? camera.stopRecording() : record()
+                if camera.isRecording {
+                    camera.stopRecording()
+                } else if !camera.isPreparingRecording {
+                    record()
+                }
             } label: {
                 ZStack {
                     Circle()
@@ -160,9 +200,13 @@ struct CaptureView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(!camera.isRunning && !camera.isRecording)
-            .opacity(camera.isRunning || camera.isRecording ? 1 : 0.45)
-            .accessibilityLabel(camera.isRecording ? "Stop recording" : "Start recording")
+            .disabled((!camera.isRunning && !camera.isRecording) || camera.isPreparingRecording)
+            .opacity((camera.isRunning || camera.isRecording) && !camera.isPreparingRecording ? 1 : 0.45)
+            .accessibilityLabel(
+                camera.isPreparingRecording
+                    ? "Countdown in progress"
+                    : (camera.isRecording ? "Stop recording" : "Start recording")
+            )
 
             Spacer()
 
@@ -184,14 +228,18 @@ struct CaptureView: View {
                         isOn: $singleTake
                     )
                     Stepper(
-                        "Countdown: \(countdownSeconds)s",
+                        countdownSeconds == 0
+                            ? "Countdown: Off"
+                            : "Countdown: \(countdownSeconds)s",
                         value: $countdownSeconds,
                         in: 0 ... 30
                     )
                     Text(
                         singleTake
                             ? "One recording covers both climbers and can be split afterwards."
-                            : "Press record, walk away, then climb after the countdown."
+                            : (countdownSeconds == 0
+                                ? "Recording begins immediately when you press record."
+                                : "Press record, walk away, then climb after the countdown.")
                     )
                     .font(.caption)
                 }
@@ -200,6 +248,11 @@ struct CaptureView: View {
                     Toggle("Show framing guide", isOn: $showsFramingGuide)
                     Text("Use the guide to keep the complete route and wall visible.")
                         .font(.caption)
+                    if alignmentSourceLabel != nil {
+                        Toggle("Show wall alignment overlay", isOn: $showsAlignmentOverlay)
+                        Text("The translucent wall is visible only in this live preview; it is never written into the recording.")
+                            .font(.caption)
+                    }
                 }
 
                 SwiftUI.Section("Camera") {
@@ -247,11 +300,19 @@ struct CaptureView: View {
         error = nil
         Task {
             do {
-                let url = try await camera.startRecording(afterSeconds: countdownSeconds)
+                let url = try await camera.startRecording(
+                    afterSeconds: countdownSeconds
+                ) {
+                    recordedOrientation = tilt.captureOrientation()
+                }
                 if singleTake {
                     recordedURL = url
                 } else {
-                    model.beginAddingVideo(from: url, role: role)
+                    model.beginAddingVideo(
+                        from: url,
+                        role: role,
+                        captureOrientation: recordedOrientation
+                    )
                     dismiss()
                 }
             } catch {
@@ -259,15 +320,93 @@ struct CaptureView: View {
             }
         }
     }
+
+    /// The opposite role is always the alignment source, regardless of which
+    /// climber was recorded first. This makes reference → attempt and attempt
+    /// → reference the same flow.
+    private func loadAlignmentTarget() async {
+        let source: VideoRef? = switch role {
+        case .reference: model.session?.attempts.first
+        case .attempt: model.session?.reference
+        }
+        guard let source, let url = await model.videoURL(source) else { return }
+
+        alignmentSourceLabel = source.label.isEmpty
+            ? (source.role == .reference ? "reference" : "attempt")
+            : source.label
+        tilt.referenceOrientation = source.captureOrientation
+        isLoadingAlignmentOverlay = true
+        let image = await CaptureAlignmentOverlay.clearestWallFrame(url: url)
+        guard !Task.isCancelled else { return }
+        alignmentOverlay = image
+        isLoadingAlignmentOverlay = false
+        if image == nil {
+            error = "Could not build the wall alignment overlay from the other clip. You can still record normally."
+        }
+    }
 }
 
-/// Task 0.0b — crude is fine. A grid for straight-on framing, a level
-/// indicator, and route-coverage marks. It has to be legible in gym lighting,
-/// not pretty.
-struct FramingGuide: View {
-    let rollDegrees: Double
-    let pitchDegrees: Double
+private struct CaptureAlignmentGuide: View {
+    let sourceLabel: String
+    let motionAvailable: Bool
+    let hasMotionReference: Bool
+    let deltaRollDegrees: Double
+    let deltaPitchDegrees: Double
 
+    private var combinedError: Double {
+        hypot(deltaRollDegrees, deltaPitchDegrees)
+    }
+
+    private var isAligned: Bool {
+        motionAvailable && hasMotionReference && combinedError < 3
+    }
+
+    private var statusColor: Color {
+        guard motionAvailable, hasMotionReference else { return .white }
+        if isAligned { return AppTheme.accent }
+        return combinedError < 8 ? .yellow : .red
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(isAligned ? "CAMERA ALIGNED" : "MATCH \(sourceLabel.uppercased())")
+                    .font(.caption.weight(.black).monospaced())
+                Spacer()
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 10, height: 10)
+            }
+
+            if motionAvailable, hasMotionReference {
+                Text(String(
+                    format: "roll %+.1f°  pitch %+.1f°",
+                    deltaRollDegrees,
+                    deltaPitchDegrees
+                ))
+                .font(.caption.monospacedDigit().monospaced())
+                .foregroundStyle(statusColor)
+            } else {
+                Text(hasMotionReference
+                    ? "Motion unavailable — match the wall overlay"
+                    : "Imported clip — match the wall overlay")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(.black.opacity(0.76), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(statusColor.opacity(0.8), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Task 0.0b — a grid and route-coverage marks for straight-on framing.
+struct FramingGuide: View {
     var body: some View {
         GeometryReader { geometry in
             let w = geometry.size.width, h = geometry.size.height
@@ -290,12 +429,6 @@ struct FramingGuide: View {
                 .stroke(.yellow.opacity(0.8), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
 
                 VStack {
-                    Text(levelText)
-                        .font(.system(.headline, design: .monospaced))
-                        .foregroundStyle(isLevel ? .green : .red)
-                        .padding(6)
-                        .background(.black.opacity(0.5))
-                        .padding(.top, 8)
                     Spacer()
                     Text("Whole route inside the dashed box · wall visible either side")
                         .font(.caption)
@@ -308,53 +441,120 @@ struct FramingGuide: View {
         }
         .allowsHitTesting(false)
     }
-
-    private var isLevel: Bool { abs(rollDegrees) < 2 && abs(pitchDegrees) < 5 }
-
-    private var levelText: String {
-        String(format: "roll %+.1f°  pitch %+.1f°%@", rollDegrees, pitchDegrees, isLevel ? "  LEVEL" : "")
-    }
 }
 
 @MainActor
 @Observable
 final class TiltMonitor {
     private let motion = CMMotionManager()
+    private(set) var isAvailable = false
+    private(set) var currentOrientation: CaptureOrientation?
+    var referenceOrientation: CaptureOrientation?
     var rollDegrees: Double = 0
     var pitchDegrees: Double = 0
 
+    var deltaRollDegrees: Double {
+        guard let referenceOrientation else { return 0 }
+        return Self.wrappedDegrees(rollDegrees - referenceOrientation.rollDegrees)
+    }
+
+    var deltaPitchDegrees: Double {
+        guard let referenceOrientation else { return 0 }
+        return pitchDegrees - referenceOrientation.pitchDegrees
+    }
+
     func start() {
-        guard motion.isDeviceMotionAvailable else { return }
+        isAvailable = motion.isDeviceMotionAvailable
+        guard isAvailable else { return }
         motion.deviceMotionUpdateInterval = 1.0 / 20
-        motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
+        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let data else { return }
-            // Portrait phone on a tripod: roll is the horizon tilt, pitch is how
-            // far it is angled up the wall.
-            self.rollDegrees = data.attitude.roll * 180 / .pi
-            self.pitchDegrees = (data.attitude.pitch * 180 / .pi) - 90
+            let gravity = data.gravity
+            let orientation = CaptureOrientation(
+                gravityX: gravity.x,
+                gravityY: gravity.y,
+                gravityZ: gravity.z
+            )
+            currentOrientation = orientation
+            rollDegrees = orientation.rollDegrees
+            pitchDegrees = orientation.pitchDegrees
         }
     }
 
     func stop() { motion.stopDeviceMotionUpdates() }
+
+    func captureOrientation() -> CaptureOrientation? {
+        currentOrientation
+    }
+
+    private static func wrappedDegrees(_ degrees: Double) -> Double {
+        var wrapped = degrees.truncatingRemainder(dividingBy: 360)
+        if wrapped > 180 { wrapped -= 360 }
+        if wrapped < -180 { wrapped += 360 }
+        return wrapped
+    }
 }
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let alignmentOverlay: CGImage?
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
-        view.layer.session = session
-        view.layer.videoGravity = .resizeAspectFill
+        view.previewLayer.session = session
+        view.setAlignmentOverlay(alignmentOverlay)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.layer.session = session
+        uiView.previewLayer.session = session
+        uiView.setAlignmentOverlay(alignmentOverlay)
     }
 
     final class PreviewView: UIView {
-        override static var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
-        override var layer: AVCaptureVideoPreviewLayer { super.layer as! AVCaptureVideoPreviewLayer }
+        let previewLayer = AVCaptureVideoPreviewLayer()
+        private let alignmentLayer = CALayer()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+
+            clipsToBounds = true
+            previewLayer.videoGravity = .resizeAspectFill
+            layer.addSublayer(previewLayer)
+
+            alignmentLayer.contentsGravity = .resizeAspectFill
+            alignmentLayer.opacity = 0.35
+            alignmentLayer.masksToBounds = true
+            alignmentLayer.contentsScale = UIScreen.main.scale
+            layer.addSublayer(alignmentLayer)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+
+            // The recorded wall and the live camera must use the exact same
+            // viewport. Sharing bounds and aspect-fill geometry avoids the
+            // subtle resize/center drift caused by two independent SwiftUI
+            // layout passes.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            previewLayer.frame = bounds
+            alignmentLayer.frame = bounds
+            CATransaction.commit()
+        }
+
+        func setAlignmentOverlay(_ image: CGImage?) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            alignmentLayer.contents = image
+            alignmentLayer.isHidden = image == nil
+            CATransaction.commit()
+        }
     }
 }
 
@@ -365,6 +565,7 @@ struct SingleTakeSplitView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let url: URL
+    let captureOrientation: CaptureOrientation?
 
     @State private var duration: Double = 0
     @State private var splitAt: Double = 0
@@ -404,8 +605,16 @@ struct SingleTakeSplitView: View {
                     start: CMTime(seconds: splitAt, preferredTimescale: 600),
                     duration: CMTime(seconds: max(0.1, duration - splitAt), preferredTimescale: 600)
                 ))
-                await model.addVideo(from: first, role: .reference)
-                await model.addVideo(from: second, role: .attempt)
+                await model.addVideo(
+                    from: first,
+                    role: .reference,
+                    captureOrientation: captureOrientation
+                )
+                await model.addVideo(
+                    from: second,
+                    role: .attempt,
+                    captureOrientation: captureOrientation
+                )
                 try? FileManager.default.removeItem(at: first)
                 try? FileManager.default.removeItem(at: second)
                 message = "Imported both halves."
