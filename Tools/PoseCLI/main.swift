@@ -985,6 +985,30 @@ func commandSeed(_ args: [String]) async throws {
     session.reference = reference
     session.attempts = [attempt]
     try await store.save(session)
+
+    // **Pose is extracted here, on the Mac, and written straight into the
+    // session's pose cache.**
+    //
+    // `VNDetectHumanBodyPoseRequest` cannot be set up in the iOS Simulator — it
+    // fails per frame with "Unable to setup request", so a seeded session
+    // processes to zero contacts, zero holds and zero moves, and every screen
+    // downstream of the pipeline is untestable there. The app already treats
+    // cached pose as authoritative and never re-runs Vision over it, so seeding
+    // the cache is enough to make the whole pipeline run in the Simulator on
+    // real footage.
+    //
+    // Skipped with `--no-pose` when you only want the clips.
+    guard !args.contains("--no-pose") else {
+        print(session.id.uuidString)
+        return
+    }
+    let config = TuningConfig()
+    let extractor = VisionPoseExtractor()
+    for (video, path) in [(reference, rest[1]), (attempt, rest[2])] {
+        let sequence = try await extractor.extract(url: URL(fileURLWithPath: path), config: config) { _ in }
+        try await store.cachePose(sequence, session: session, video: video, source: .vision)
+        FileHandle.standardError.write("pose cached: \(video.label) — \(sequence.count) frames\n".data(using: .utf8)!)
+    }
     print(session.id.uuidString)
 }
 

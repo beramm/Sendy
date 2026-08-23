@@ -20,8 +20,24 @@ struct ProcessingView: View {
                 Text(detail).font(.title3.monospaced()).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 if case .running(_, let index, let fraction) = model.state {
-                    ProgressView(value: Double(index) + fraction, total: Double(ProcessingPipeline.stageCount))
-                        .tint(AppTheme.accent).padding(.horizontal, 42)
+                    // Clamped because a stage reporting a fraction slightly past
+                    // 1 would otherwise print "101%" — the bar itself clips, but
+                    // the number would not.
+                    let progress = min(1, max(0, (Double(index) + fraction) / Double(ProcessingPipeline.stageCount)))
+                    VStack(spacing: 10) {
+                        ProgressView(value: progress)
+                            .tint(AppTheme.accent)
+                        // Monospaced digits so the layout does not twitch as the
+                        // number counts up.
+                        Text(progress.formatted(.percent.precision(.fractionLength(0))))
+                            .font(.subheadline.monospaced())
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 42)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Analysis progress")
+                    .accessibilityValue(progress.formatted(.percent.precision(.fractionLength(0))))
                     Button("Cancel", role: .destructive) { model.cancelProcessing() }
                 }
                 if case .failed(let message) = model.state {
@@ -32,11 +48,24 @@ struct ProcessingView: View {
             .padding(32).foregroundStyle(.white)
         }
         .navigationBarBackButtonHidden(true)
-        .onChange(of: model.state) { _, state in
-            guard state == .done, model.processed != nil else { return }
-            model.path.removeAll { $0 == .processing }
-            if model.path.last != .results { model.path.append(.results) }
-        }
+        // **One path assignment, not a pop followed by a push.** Removing
+        // `.processing` and appending `.results` as two mutations in the same
+        // update is a pop and a push of the same `NavigationStack` in one tick,
+        // and the stack can settle on neither — which strands the run on
+        // "Comparison ready" with no back button and no way forward.
+        .onChange(of: model.state) { _, _ in advanceWhenReady() }
+        // Covers the run that finished before this view was on screen: there is
+        // no state *change* left to observe in that case, and without this the
+        // screen waits for an event that has already happened.
+        .task { advanceWhenReady() }
+    }
+
+    private func advanceWhenReady() {
+        guard model.state == .done, model.processed != nil else { return }
+        var path = model.path.filter { $0 != .processing }
+        if path.last != .results { path.append(.results) }
+        guard path != model.path else { return }
+        model.path = path
     }
 
     private var title: String {

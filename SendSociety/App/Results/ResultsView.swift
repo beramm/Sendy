@@ -25,6 +25,14 @@ struct ResultsView: View {
     @State private var syncLocked = true
     @State private var attemptOffsetOverride: Double?
     @State private var showWarnings = false
+    /// True while a finger is on either scrubber slider. Panes decode
+    /// keyframes while it is true and the exact frame when it goes false —
+    /// this is most of what makes the scrubber feel attached to the video.
+    @State private var isScrubbing = false
+    /// One cache for the whole screen. Per-pane caches meant a mode switch
+    /// threw away every decoded frame, and the two panes never shared a
+    /// generator.
+    @State private var frameCache = FrameImageCache()
 
     var body: some View {
         ZStack {
@@ -83,7 +91,8 @@ struct ResultsView: View {
                             processed: processed,
                             position: $position,
                             syncLocked: $syncLocked,
-                            attemptOffsetOverride: $attemptOffsetOverride
+                            attemptOffsetOverride: $attemptOffsetOverride,
+                            isScrubbing: $isScrubbing
                         )
                         .padding(.horizontal)
 
@@ -169,13 +178,17 @@ struct ResultsView: View {
                     title: "Reference",
                     video: processed.session.reference,
                     pose: processed.referencePose,
-                    frameIndex: frames.reference
+                    frameIndex: frames.reference,
+                    scrubbing: isScrubbing,
+                    cache: frameCache
                 )
                 ClimberPane(
                     title: processed.attempt?.label ?? "Attempt",
                     video: processed.attempt,
                     pose: processed.attemptPose,
                     frameIndex: frames.attempt,
+                    scrubbing: isScrubbing,
+                    cache: frameCache,
                     unavailableReason: currentSequence(processed)?.attemptReached == false
                         ? "no footage for this sequence"
                         : "not reached"
@@ -193,7 +206,9 @@ struct ResultsView: View {
                     colour: .green,
                     // Wall space is the reference's own image space.
                     transform: nil,
-                    overlays: overlays
+                    overlays: overlays,
+                    scrubbing: isScrubbing,
+                    cache: frameCache
                 )
                 SkeletonOverlayPane(
                     title: processed.attempt?.label ?? "Attempt",
@@ -207,6 +222,8 @@ struct ResultsView: View {
                     // into its own frame before drawing it on its own video.
                     transform: processed.alignment.homography.inverted,
                     overlays: overlays,
+                    scrubbing: isScrubbing,
+                    cache: frameCache,
                     unavailableReason: currentSequence(processed)?.attemptReached == false
                         ? "no footage for this sequence"
                         : "not reached"
@@ -432,6 +449,9 @@ struct MoveScrubber: View {
     @Binding var position: MovePosition
     @Binding var syncLocked: Bool
     @Binding var attemptOffsetOverride: Double?
+    /// Raised while a finger is down, so the panes can decode keyframes for the
+    /// duration of the drag and the real frame once it lands.
+    @Binding var isScrubbing: Bool
 
     var body: some View {
         VStack(spacing: 4) {
@@ -454,7 +474,7 @@ struct MoveScrubber: View {
                 .disabled(position.sectionIndex >= processed.sequences.sequences.count - 1)
             }
 
-            Slider(value: $position.offset, in: 0 ... 1)
+            Slider(value: $position.offset, in: 0 ... 1) { editing in isScrubbing = editing }
 
             // One marker per sequence, widthed by how many reference moves it
             // holds, so a sequence covering two moves is visibly wider than one
@@ -505,10 +525,13 @@ struct MoveScrubber: View {
                     attemptOffsetOverride = locked ? nil : position.offset
                 }
             if !syncLocked {
-                Slider(value: Binding(
-                    get: { attemptOffsetOverride ?? position.offset },
-                    set: { attemptOffsetOverride = $0 }
-                ), in: 0 ... 1)
+                Slider(
+                    value: Binding(
+                        get: { attemptOffsetOverride ?? position.offset },
+                        set: { attemptOffsetOverride = $0 }
+                    ),
+                    in: 0 ... 1
+                ) { editing in isScrubbing = editing }
                 Text("Attempt pane detached — scrubbing on its own clock.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -637,20 +660,25 @@ struct ClimberPane: View {
     /// Only for the frame timestamp — the pane draws video, nothing derived.
     let pose: PoseSequence
     let frameIndex: Int?
+    /// True while a finger is on the scrubber. Decodes land on keyframes for
+    /// the duration of a drag and on the exact frame once it ends.
+    let scrubbing: Bool
+    /// Shared with every other pane on the screen, so a mode switch does not
+    /// start from a cold cache.
+    let cache: FrameImageCache
     /// Why there is no frame, when there isn't one. "Not reached" and
     /// "different order" are opposite claims about the climber, and the pane
     /// used to assert the first for both.
     var unavailableReason: String = "not reached"
 
-    @State private var image: CGImage?
-    @State private var decodeFailure: String?
-    @State private var cache = FrameImageCache()
+    @State private var frames = VideoFrameLoader()
+    @State private var url: URL?
 
     var body: some View {
         VStack(spacing: 2) {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             ZStack {
-                if let image {
+                if let image = frames.image {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -662,7 +690,7 @@ struct ClimberPane: View {
                 // does not exist, and saying which is the difference between
                 // "the pipeline found nothing here" and "the scrubber outran
                 // the decoder". The last good frame stays on screen underneath.
-                if let decodeFailure {
+                if let decodeFailure = frames.decodeFailure {
                     VStack {
                         Spacer()
                         Text(decodeFailure)
@@ -683,42 +711,18 @@ struct ClimberPane: View {
                 }
             }
         }
-        .task(id: frameIndex) { await load() }
-    }
-
-    /// **Never blanks the pane on a failed decode.**
-    ///
-    /// `.task(id:)` cancels the previous load on every scrubber tick, and a
-    /// cancelled `AVAssetImageGenerator` returns nothing. Assigning that nothing
-    /// straight into `image` is what made dragging the scrubber flash "no
-    /// frame": the pipeline was fine and the decoder was simply behind. The last
-    /// good frame stays up, and only a real absence — no frame index, no pose
-    /// frame — clears it.
-    private func load() async {
-        guard let video, let frameIndex, let frame = pose.frame(at: frameIndex) else {
-            image = nil
-            decodeFailure = nil
-            return
+        .task(id: video?.id) {
+            guard let video else { url = nil; return }
+            url = await model.videoURL(video)
         }
-        // Settle before decoding. Every scrubber tick cancels the previous
-        // load, and a 4K frame takes longer to decode than a drag takes to
-        // move — so during a continuous drag no decode ever finished and the
-        // pane held its last frame while the skeleton tracked the slider. The
-        // sleep is cancelled along with the task, so only the position the
-        // finger stopped on actually decodes. First frame is immediate.
-        if image != nil {
-            try? await Task.sleep(for: .milliseconds(70))
-            guard !Task.isCancelled else { return }
-        }
-        guard let url = await model.videoURL(video) else {
-            decodeFailure = "the video file for this clip is missing from the session"
-            return
-        }
-        if let decoded = await cache.image(url: url, seconds: frame.timeSeconds) {
-            image = decoded
-            decodeFailure = nil
-        } else if !Task.isCancelled {
-            decodeFailure = String(format: "frame %d (%.2fs) wouldn't decode", frameIndex, frame.timeSeconds)
+        .task(id: FrameRequest(url: url, frameIndex: frameIndex, scrubbing: scrubbing)) {
+            await frames.load(
+                url: url,
+                frameIndex: frameIndex,
+                timeSeconds: frameIndex.flatMap { pose.frame(at: $0)?.timeSeconds },
+                scrubbing: scrubbing,
+                cache: cache
+            )
         }
     }
 }

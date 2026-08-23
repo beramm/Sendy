@@ -450,11 +450,15 @@ struct SkeletonOverlayPane: View {
     /// `nil` for the reference, whose image space *is* wall space.
     let transform: Homography?
     let overlays: AnalyticalOverlays
+    /// True while a finger is on the scrubber — keyframes during a drag, the
+    /// exact frame once it ends. See `FrameImageCache.Fidelity`.
+    let scrubbing: Bool
+    /// Shared with every other pane on the screen.
+    let cache: FrameImageCache
     var unavailableReason: String = "not reached"
 
-    @State private var image: CGImage?
-    @State private var decodeFailure: String?
-    @State private var cache = FrameImageCache()
+    @State private var frames = VideoFrameLoader()
+    @State private var url: URL?
 
     private var frame: PoseFrame? { frameIndex.flatMap { pose.frame(at: $0) } }
 
@@ -468,7 +472,7 @@ struct SkeletonOverlayPane: View {
                 // assumed — otherwise every joint is offset by the letterbox.
                 let fitted = fittedRect(in: geometry.size)
                 ZStack(alignment: .topLeading) {
-                    if let image {
+                    if let image = frames.image {
                         Image(decorative: image, scale: 1)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
@@ -514,7 +518,7 @@ struct SkeletonOverlayPane: View {
                             .padding(4)
                             .background(.thinMaterial)
                     }
-                    if let decodeFailure {
+                    if let decodeFailure = frames.decodeFailure {
                         VStack {
                             Spacer()
                             Text(decodeFailure).font(.caption2).padding(4).background(.thinMaterial)
@@ -524,12 +528,24 @@ struct SkeletonOverlayPane: View {
                 }
             }
         }
-        .task(id: frameIndex) { await load() }
+        .task(id: video?.id) {
+            guard let video else { url = nil; return }
+            url = await model.videoURL(video)
+        }
+        .task(id: FrameRequest(url: url, frameIndex: frameIndex, scrubbing: scrubbing)) {
+            await frames.load(
+                url: url,
+                frameIndex: frameIndex,
+                timeSeconds: frame?.timeSeconds,
+                scrubbing: scrubbing,
+                cache: cache
+            )
+        }
     }
 
     /// Where an aspect-fit image of this size actually lands inside the pane.
     private func fittedRect(in size: CGSize) -> CGRect {
-        guard let image, image.width > 0, image.height > 0, size.width > 0, size.height > 0 else {
+        guard let image = frames.image, image.width > 0, image.height > 0, size.width > 0, size.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
         let imageAspect = CGFloat(image.width) / CGFloat(image.height)
@@ -541,30 +557,5 @@ struct SkeletonOverlayPane: View {
         let width = size.height * imageAspect
         return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
     }
-
-    /// Same rules as `ClimberPane`: a cancelled decode is not an absent frame,
-    /// so the last good one stays on screen — and the decode is debounced, so
-    /// a continuous drag doesn't cancel every attempt before one finishes and
-    /// leave the video frozen under a skeleton that keeps moving.
-    private func load() async {
-        guard let video, let frame else {
-            image = nil
-            decodeFailure = nil
-            return
-        }
-        if image != nil {
-            try? await Task.sleep(for: .milliseconds(70))
-            guard !Task.isCancelled else { return }
-        }
-        guard let url = await model.videoURL(video) else {
-            decodeFailure = "the video file for this clip is missing from the session"
-            return
-        }
-        if let decoded = await cache.image(url: url, seconds: frame.timeSeconds) {
-            image = decoded
-            decodeFailure = nil
-        } else if !Task.isCancelled {
-            decodeFailure = String(format: "frame %d (%.2fs) wouldn't decode", frameIndex ?? -1, frame.timeSeconds)
-        }
-    }
 }
+
