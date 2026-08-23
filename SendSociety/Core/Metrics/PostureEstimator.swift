@@ -91,10 +91,25 @@ public struct PostureFrame: Sendable, Codable, Hashable {
     /// the coach's second-priority read.
     public var leftKneeOverAnkle: Double?
     public var rightKneeOverAnkle: Double?
-    /// Wrists whose arm is bent, lat-loaded **and** carrying weight. A bent arm
-    /// holding nothing is a shake-out, not a pull, and counting it was what made
-    /// `straightArmRatio` read badly on rests.
+    /// Wrists whose arm is bent, lat-levered **and** carrying weight — the
+    /// strict both-at-once case. A bent arm holding nothing is a shake-out, not
+    /// a pull, and counting it was what made `straightArmRatio` read badly on
+    /// rests.
     public var pullingHands: Set<JointName>
+    /// Wrists whose **armpit angle** is closed and which are carrying weight:
+    /// the lat is levering the body in, whatever the elbow is doing.
+    ///
+    /// Held apart from `elbowFlexedHands` because the two name different
+    /// muscles and the two come apart in practice. A straight arm pulling down
+    /// on an undercling closes the armpit with the elbow wide open, and while
+    /// these were ANDed into one flag the elbow vetoed that — a pull that was
+    /// really happening went uncounted.
+    public var latLoadedHands: Set<JointName>
+    /// Wrists whose **elbow** is bent and which are carrying weight: the elbow
+    /// flexors are working, whatever the shoulder is doing. The counterpart
+    /// case to `latLoadedHands`, and the reason a straight arm is a trade
+    /// rather than a rest.
+    public var elbowFlexedHands: Set<JointName>
     /// |(right hand + left foot) − (left hand + right foot)|. The diagonal is
     /// the pairing a coach loads and unloads as one unit; left-versus-right
     /// asymmetry cannot see it.
@@ -108,6 +123,8 @@ public struct PostureFrame: Sendable, Codable, Hashable {
         leftKneeOverAnkle: Double? = nil,
         rightKneeOverAnkle: Double? = nil,
         pullingHands: Set<JointName> = [],
+        latLoadedHands: Set<JointName> = [],
+        elbowFlexedHands: Set<JointName> = [],
         diagonalImbalance: Double? = nil
     ) {
         self.pelvis = pelvis
@@ -117,7 +134,28 @@ public struct PostureFrame: Sendable, Codable, Hashable {
         self.leftKneeOverAnkle = leftKneeOverAnkle
         self.rightKneeOverAnkle = rightKneeOverAnkle
         self.pullingHands = pullingHands
+        self.latLoadedHands = latLoadedHands
+        self.elbowFlexedHands = elbowFlexedHands
         self.diagonalImbalance = diagonalImbalance
+    }
+
+    /// Adding a stored property to a `Codable` struct orphans every session
+    /// already on disk — the same failure `FrameMetrics` and `TuningConfig`
+    /// both document. Decoded leniently for that reason: a session measured
+    /// before the lat and elbow reads were split comes back with those two
+    /// sets empty rather than failing to decode at all.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pelvis = try c.decodeIfPresent(PelvisPose.self, forKey: .pelvis)
+        torsoLeanDegrees = try c.decodeIfPresent(Double.self, forKey: .torsoLeanDegrees)
+        leftShoulderDegrees = try c.decodeIfPresent(Double.self, forKey: .leftShoulderDegrees)
+        rightShoulderDegrees = try c.decodeIfPresent(Double.self, forKey: .rightShoulderDegrees)
+        leftKneeOverAnkle = try c.decodeIfPresent(Double.self, forKey: .leftKneeOverAnkle)
+        rightKneeOverAnkle = try c.decodeIfPresent(Double.self, forKey: .rightKneeOverAnkle)
+        pullingHands = try c.decodeIfPresent(Set<JointName>.self, forKey: .pullingHands) ?? []
+        latLoadedHands = try c.decodeIfPresent(Set<JointName>.self, forKey: .latLoadedHands) ?? []
+        elbowFlexedHands = try c.decodeIfPresent(Set<JointName>.self, forKey: .elbowFlexedHands) ?? []
+        diagonalImbalance = try c.decodeIfPresent(Double.self, forKey: .diagonalImbalance)
     }
 
     public static let unavailable = PostureFrame()
@@ -223,17 +261,34 @@ public struct PostureEstimator: Sendable {
         out.leftKneeOverAnkle = kneeOverAnkle(frame, side: .left, scale: scale)
         out.rightKneeOverAnkle = kneeOverAnkle(frame, side: .right, scale: scale)
 
+        // Three reads rather than one. The armpit angle says the lat is
+        // levering the body in; the elbow angle says the elbow flexors are
+        // holding it. Different muscles, and they dissociate — a straight arm
+        // pulling down beside the hip closes the armpit with the elbow wide
+        // open, and an overhead lock-off bends the elbow with the armpit open.
+        // ANDing them into a single flag missed both cases, so each condition
+        // is now recorded on its own and `pullingHands` keeps the strict
+        // both-at-once meaning it always had.
+        var latLoaded: Set<JointName> = []
+        var elbowFlexed: Set<JointName> = []
         var pulling: Set<JointName> = []
         for (side, wrist, shoulderAngle) in [
             (BodySide.left, JointName.leftWrist, out.leftShoulderDegrees),
             (BodySide.right, JointName.rightWrist, out.rightShoulderDegrees)
         ] {
-            let elbow = elbowAngle(frame, side: side, iso: iso)
-            guard let elbow, elbow < config.straightArmDegrees else { continue }
-            guard let shoulderAngle, shoulderAngle < config.latEngagementDegrees else { continue }
+            // Load is the one condition both reads share: a limb holding
+            // nothing is a shake-out whatever shape it is in.
             guard load[wrist] >= config.pullingArmLoadFraction else { continue }
-            pulling.insert(wrist)
+            let elbowBent = elbowAngle(frame, side: side, iso: iso)
+                .map { $0 < config.straightArmDegrees } ?? false
+            let armpitClosed = shoulderAngle
+                .map { $0 < config.latEngagementDegrees } ?? false
+            if armpitClosed { latLoaded.insert(wrist) }
+            if elbowBent { elbowFlexed.insert(wrist) }
+            if armpitClosed && elbowBent { pulling.insert(wrist) }
         }
+        out.latLoadedHands = latLoaded
+        out.elbowFlexedHands = elbowFlexed
         out.pullingHands = pulling
 
         let diagonalA = load[.rightWrist] + load[.leftAnkle]

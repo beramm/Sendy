@@ -14,6 +14,12 @@ struct SessionSetupView: View {
 
     @State private var playback: PlaybackItem?
     @State private var trimmingVideo: VideoRef?
+    @State private var editedName = ""
+    /// Focus on the name field, so something other than the keyboard's own
+    /// return key can let go of it. Without this the keyboard covers the
+    /// Compare button and the only way out is the return key — a dead end on a
+    /// screen whose whole job is to get you to that button.
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         ZStack {
@@ -22,7 +28,10 @@ struct SessionSetupView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Compare")
                     .font(.system(size: 40, weight: .bold))
-                    .padding(.bottom, 72)
+                    .padding(.bottom, 6)
+
+                sessionName
+                    .padding(.bottom, 56)
 
                 HStack(alignment: .top, spacing: 24) {
                     clipColumn(
@@ -53,9 +62,25 @@ struct SessionSetupView: View {
             .padding(.top, 22)
             .padding(.bottom, 28)
         }
+        // The keyboard overlays this screen rather than resizing it. `ClipCard`
+        // sizes itself from the available height via `.aspectRatio(_:.fit)`, so
+        // letting the keyboard eat half the height shrank the cards vertically
+        // and — because the ratio is fixed — dragged their width down with it,
+        // collapsing two video thumbnails into small ovals. Nothing here needs
+        // to move out of the keyboard's way: the name field is at the top, and
+        // the Compare button it covers is reachable the moment the keyboard is
+        // dismissed, which the tap gesture below and the return key both do.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        // A tap anywhere that isn't a control drops the keyboard. Buttons and
+        // the field itself still get their taps first — this only catches what
+        // nothing else claimed.
+        .contentShape(Rectangle())
+        .onTapGesture { nameFocused = false }
         .foregroundStyle(.white)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: model.session?.id) { editedName = model.session?.name ?? "" }
+        .onChange(of: model.session?.name) { _, name in editedName = name ?? "" }
         .sheet(item: $playback) { item in
             ClipPlaybackView(url: item.url)
         }
@@ -122,6 +147,57 @@ struct SessionSetupView: View {
         // Give both HStack children the same ideal width before they expand.
         // This keeps the two aspect-ratio-driven cards exactly the same size.
         .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity)
+    }
+
+    /// The session's name, editable in place.
+    ///
+    /// Renaming is the correction mechanism for the whole naming feature: it
+    /// locks the name against any later resolve, and it teaches the placemark
+    /// cache, so the next session at this gym inherits the climber's name
+    /// rather than Apple's label for the building.
+    private var sessionName: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Session name", text: $editedName)
+                .font(.system(size: 18, weight: .medium))
+                .textFieldStyle(.plain)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { nameFocused = false }
+                // Commit on *losing focus* rather than on submit, so a name
+                // typed and then tapped away from is kept. Committing only on
+                // submit silently discarded the edit by every other exit.
+                .onChange(of: nameFocused) { _, focused in
+                    guard !focused else { return }
+                    let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // An emptied field is an abandoned edit, not a request for
+                    // a nameless session. `renameSession` refuses it either
+                    // way; this puts the real name back on screen.
+                    guard !trimmed.isEmpty else {
+                        editedName = model.session?.name ?? ""
+                        return
+                    }
+                    Task { await model.renameSession(to: editedName) }
+                }
+            Text(nameProvenance)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Where the name came from, stated plainly.
+    ///
+    /// The date case deliberately reads as an outcome rather than a failure.
+    /// Gyms are windowless warehouses where GPS and cell both fail, so a date
+    /// name is the *normal* result — dressing it as "location unavailable"
+    /// would put a warning on the majority case and teach the user to ignore
+    /// warnings.
+    private var nameProvenance: String {
+        switch model.sessionNameSource {
+        case .user: "Your name. Nothing renames it."
+        case .cache: "Named from a gym you've been to before."
+        case .network: "Named from Apple Maps. Rename it and the next session here inherits your name."
+        case .date: "Named by date. Rename it whenever you like."
+        }
     }
 
     private var statusText: String {

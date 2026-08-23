@@ -150,7 +150,8 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         // hip is explains where the load went; the reverse is not true.
         let kinds: [MetricKind] = [
             .hipDistanceMean, .pelvisTilt, .pelvisTurn, .torsoLean, .kneeDrive,
-            .pullingArmTime, .armLoadShare, .loadAsymmetry, .footPlacementCount
+            .pullingArmTime, .latLoadTime, .elbowFlexTime, .armLoadShare,
+            .loadAsymmetry, .footPlacementCount
         ]
         var notes: [AnalysisNote] = []
         var unavailable: [MetricKind] = []
@@ -232,6 +233,10 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
             return String(format: "Your knee came about %.2f body-lengths across your foot at its furthest.", value)
         case .pullingArmTime:
             return String(format: "You were actively pulling — bent arm, loaded, lat engaged — %.0f%% of this move.", value * 100)
+        case .latLoadTime:
+            return String(format: "Your back and shoulders were levering you in — armpit closed, hand loaded — %.0f%% of this move.", value * 100)
+        case .elbowFlexTime:
+            return String(format: "You held a bent arm with weight on it %.0f%% of this move.", value * 100)
         case .diagonalLoadBalance:
             return String(format: "Your weight sat %.0f%% onto one diagonal rather than shared across both.", value * 100)
         }
@@ -262,6 +267,8 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         case .torsoLean: return better ? "you stayed under your hands" : "you hung off to one side"
         case .kneeDrive: return better ? "knee in, hip to the wall" : "knees stacked over your feet"
         case .pullingArmTime: return better ? "you barely pulled" : "you pulled through it"
+        case .latLoadTime: return better ? "your legs did the reaching" : "you pulled in with your back"
+        case .elbowFlexTime: return better ? "you hung off the bone" : "you held it bent-armed"
         case .diagonalLoadBalance: return better ? "both diagonals shared it" : "one diagonal took it"
         }
     }

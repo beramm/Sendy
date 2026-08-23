@@ -424,16 +424,28 @@ public struct MetricsEngine: Sendable {
             : MetricValue(value: kneeDrives.max()!, confidence: Double(kneeDrives.count) / Double(frames.count))
 
         // Pulling time, not bent-arm time. A bent arm holding nothing is a
-        // shake-out; `PostureEstimator` requires a bent elbow, a levered lat and
-        // load on that hand before it counts one.
+        // shake-out; `PostureEstimator` requires load on the hand before it
+        // counts any of these three.
+        //
+        // Reported as three numbers because the arm has two costs and they do
+        // not move together. `latLoadTime` is the back and shoulder levering
+        // the body in; `elbowFlexTime` is the biceps and forearm holding a bent
+        // arm; `pullingArmTime` is both at once. A straight arm lowers the
+        // second and not the first, which is why it is a trade rather than a
+        // rest — and why one combined flag could not say which cost was paid.
         if !onWall.isEmpty {
-            let pulling = onWall.filter { !$0.posture.pullingHands.isEmpty }.count
-            values[.pullingArmTime] = MetricValue(
-                value: Double(pulling) / Double(onWall.count),
-                confidence: Double(onWall.count) / Double(frames.count)
-            )
+            let coverage = Double(onWall.count) / Double(frames.count)
+            func share(_ hands: (PostureFrame) -> Set<JointName>) -> MetricValue {
+                let n = onWall.filter { !hands($0.posture).isEmpty }.count
+                return MetricValue(value: Double(n) / Double(onWall.count), confidence: coverage)
+            }
+            values[.pullingArmTime] = share(\.pullingHands)
+            values[.latLoadTime] = share(\.latLoadedHands)
+            values[.elbowFlexTime] = share(\.elbowFlexedHands)
         } else {
             values[.pullingArmTime] = .unavailable
+            values[.latLoadTime] = .unavailable
+            values[.elbowFlexTime] = .unavailable
         }
 
         let diagonals = onWall.compactMap(\.posture.diagonalImbalance)

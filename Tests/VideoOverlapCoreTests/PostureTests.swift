@@ -176,6 +176,73 @@ struct PostureTests {
         #expect(!loaded.pullingHands.isEmpty)
     }
 
+    /// The regression that split the arm read into three.
+    ///
+    /// A hand loaded through a *straight* arm with the elbow drawn in to the
+    /// ribs — an undercling, a press, a hand down beside the hip — works the
+    /// lat with the elbow wide open. While `pullingHands` was the only read,
+    /// its bent-elbow condition vetoed the closed armpit and that pull was
+    /// counted as no work at all.
+    @Test("A straight arm with a closed armpit is still loading the back")
+    func straightArmStillLoadsTheLat() throws {
+        // The standing fixture is already this shape: arms hanging at the
+        // sides, so the elbow is straight and the armpit is shut.
+        let frame = SyntheticClimb.standingFrame()
+        let estimator = PostureEstimator()
+        let posture = estimator.measure(
+            frame: frame,
+            load: LimbLoad(fractions: [.leftWrist: 0.5, .rightWrist: 0.5]),
+            activeContacts: [.leftWrist, .rightWrist],
+            scale: scale(frame), hipWidthReference: 0.06, config: config
+        )
+
+        // Assert the fixture really is the shape the test claims, so a change
+        // to the fixture cannot quietly turn this into a test of nothing.
+        let armpit = try #require(posture.leftShoulderDegrees)
+        #expect(armpit < config.latEngagementDegrees, "armpit \(armpit)° should be closed")
+        let elbow = try #require(estimator.elbowAngle(frame, side: .left, iso: scale(frame).iso))
+        #expect(elbow >= config.straightArmDegrees, "elbow \(elbow)° should be straight")
+
+        #expect(posture.latLoadedHands.contains(.leftWrist), "a loaded straight arm with a shut armpit works the lat")
+        #expect(posture.elbowFlexedHands.isEmpty, "the elbow is straight, so the elbow flexors are not the cost here")
+        // The strict both-at-once read stays empty — which is exactly why it
+        // could not be the only signal.
+        #expect(posture.pullingHands.isEmpty)
+    }
+
+    /// The other half of the split: bend the elbow and both reads fire. Neither
+    /// angle on its own covers both shapes.
+    @Test("A bent, loaded arm fires the elbow read as well as the lat read")
+    func bentArmLoadsTheElbowFlexors() {
+        var frame = SyntheticClimb.standingFrame()
+        let shoulderY = 0.5 + 0.12
+        frame.joints[.leftWrist] = Joint(point: Point2D(x: 0.45, y: shoulderY - 0.01), confidence: 0.9)
+        frame.joints[.rightWrist] = Joint(point: Point2D(x: 0.55, y: shoulderY - 0.01), confidence: 0.9)
+        let posture = PostureEstimator().measure(
+            frame: frame,
+            load: LimbLoad(fractions: [.leftWrist: 0.5, .rightWrist: 0.5]),
+            activeContacts: [.leftWrist, .rightWrist],
+            scale: scale(frame), hipWidthReference: 0.06, config: config
+        )
+        #expect(posture.elbowFlexedHands.contains(.leftWrist))
+        #expect(posture.latLoadedHands.contains(.leftWrist))
+        #expect(posture.pullingHands.contains(.leftWrist), "both conditions hold, so the strict read fires too")
+    }
+
+    /// Load is the condition all three share. A limb holding nothing is a
+    /// shake-out whatever shape it is in.
+    @Test("An unloaded arm counts for none of the three reads")
+    func unloadedArmIsNotWork() {
+        let frame = SyntheticClimb.standingFrame()
+        let posture = PostureEstimator().measure(
+            frame: frame, load: .none, activeContacts: [],
+            scale: scale(frame), hipWidthReference: 0.06, config: config
+        )
+        #expect(posture.latLoadedHands.isEmpty)
+        #expect(posture.elbowFlexedHands.isEmpty)
+        #expect(posture.pullingHands.isEmpty)
+    }
+
     @Test("Diagonal imbalance sees what left/right asymmetry cannot")
     func diagonalImbalance() {
         let frame = SyntheticClimb.standingFrame()

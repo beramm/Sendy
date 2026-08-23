@@ -156,13 +156,32 @@ public struct FindingComposer: Sendable {
             ))
         }
 
-        // Bent arms plus arm load: hanging and pulling at the same time.
-        if let straight = worse(.straightArmRatio), let arms = worse(.armLoadShare), out.isEmpty {
+        // The arm has two costs and they do not move together, so name the one
+        // that was actually paid. The armpit closing is the back levering the
+        // body in; the elbow bending is the biceps and forearm holding it. The
+        // rule this replaced asserted that a straight arm lets "the skeleton do
+        // the work" — it does not. It takes the back and biceps out and leaves
+        // the load on the fingers, which is a trade, and the drills below say so.
+        if let lat = worse(.latLoadTime), let arms = worse(.armLoadShare), out.isEmpty {
             out.append(Finding(
-                claim: "You held this move with bent arms while your arms were also taking most of your weight.",
-                because: "That is the most tiring way to stay on the wall — the reference climber hung straighter and let the skeleton do the work.",
-                drill: "Between moves, let your arms straighten and hang off the bones rather than the muscle.",
-                metrics: [straight, arms],
+                claim: "You spent this move levering yourself in with your back and shoulders.",
+                because: "Your arms carried more of your weight than theirs did, with the elbow drawn in towards your ribs instead of the weight sitting on your feet.",
+                drill: "Find a foot that lets you stand up into the hold, so the reach starts at your legs rather than at your shoulder.",
+                metrics: [lat, arms],
+                attemptIsWorse: true
+            ))
+        }
+
+        // Bent arms plus load on them: the elbow flexors are holding the
+        // position. Keyed off `elbowFlexTime` rather than `straightArmRatio`
+        // because the ratio counts a bent arm that is holding nothing — a
+        // shake-out, which costs nothing and is not worth a finding.
+        if let elbows = worse(.elbowFlexTime), let arms = worse(.armLoadShare), out.isEmpty {
+            out.append(Finding(
+                claim: "You held this move with bent arms that were also taking your weight.",
+                because: "A bent, loaded arm works the biceps and forearm for as long as it is held, where they found a position their skeleton could hold instead.",
+                drill: "Get your feet up before you settle, then let the arm straighten so the bone takes the weight — do it the other way round and your fingers pay for it instead.",
+                metrics: [elbows, arms],
                 attemptIsWorse: true
             ))
         }
@@ -365,6 +384,22 @@ public struct FindingComposer: Sendable {
                     ? "You spent\(much) more of this move actually pulling than they did."
                     : "You pulled less than they did to get through this.",
                 drill: worse ? "Look for the foot that lets you stand up into the hold instead of pulling in to it." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .latLoadTime:
+            return Finding(
+                claim: worse
+                    ? "You spent\(much) more of this move pulling in with your back than they did."
+                    : "You leaned on your back and shoulders less than they did.",
+                drill: worse ? "Look for a foot that lets you stand up into the hold, so the reach starts at your legs." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .elbowFlexTime:
+            return Finding(
+                claim: worse
+                    ? "You held a bent, loaded arm for\(much) more of this move than they did."
+                    : "You held more of this move with the weight hanging on a straight arm.",
+                drill: worse ? "Get the feet up first, then let the arm straighten so the bone takes it rather than the biceps." : nil,
                 metrics: [d], attemptIsWorse: worse
             )
         case .diagonalLoadBalance:
