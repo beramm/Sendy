@@ -218,10 +218,52 @@ public struct MetricsEngine: Sendable {
         targetHold: Hold,
         config: TuningConfig
     ) -> SectionMetrics {
+        rangeMetrics(
+            index: section.index,
+            range: range,
+            metrics: metrics,
+            sequence: sequence,
+            contacts: contacts,
+            targetHold: targetHold,
+            config: config
+        )
+    }
+
+    /// Measures an entire anchor-to-anchor comparison sequence independently
+    /// of how many moves either climber used inside it.
+    public func sequenceMetrics(
+        climbSequence: ClimbSequence,
+        range: Range<Int>,
+        metrics: ClimbMetrics,
+        poseSequence: PoseSequence,
+        contacts: [Contact],
+        targetHold: Hold,
+        config: TuningConfig
+    ) -> SectionMetrics {
+        rangeMetrics(
+            index: climbSequence.index,
+            range: range,
+            metrics: metrics,
+            sequence: poseSequence,
+            contacts: contacts,
+            targetHold: targetHold,
+            config: config
+        )
+    }
+
+    private func rangeMetrics(
+        index: Int,
+        range: Range<Int>,
+        metrics: ClimbMetrics,
+        sequence: PoseSequence,
+        contacts: [Contact],
+        targetHold: Hold,
+        config: TuningConfig
+    ) -> SectionMetrics {
         let indices = Array(range).filter { $0 >= 0 && $0 < metrics.frames.count }
         guard !indices.isEmpty else {
             return SectionMetrics(
-                sectionIndex: section.index,
+                sectionIndex: index,
                 values: Dictionary(uniqueKeysWithValues: MetricKind.allCases.map { ($0, .unavailable) }),
                 frameCount: 0,
                 durationSeconds: 0,
@@ -446,7 +488,7 @@ public struct MetricsEngine: Sendable {
 
         let duration = (frames.last!.timeSeconds - frames.first!.timeSeconds)
         return SectionMetrics(
-            sectionIndex: section.index,
+            sectionIndex: index,
             values: values,
             frameCount: frames.count,
             durationSeconds: duration,
@@ -458,6 +500,46 @@ public struct MetricsEngine: Sendable {
 
     public func delta(
         section: Section,
+        reference: SectionMetrics,
+        attempt: SectionMetrics?,
+        alignmentCost: Double?
+    ) -> SectionDelta {
+        delta(
+            index: section.index,
+            name: section.displayName,
+            divergence: section.divergence,
+            attemptReached: section.attemptReached,
+            reference: reference,
+            attempt: attempt,
+            alignmentCost: alignmentCost
+        )
+    }
+
+    /// Builds a comparison for the whole sequence. Move-level divergence is
+    /// deliberately absent: the common anchors make the complete spans
+    /// comparable even when their internal move counts or hold order differ.
+    public func delta(
+        climbSequence: ClimbSequence,
+        reference: SectionMetrics,
+        attempt: SectionMetrics?,
+        alignmentCost: Double?
+    ) -> SectionDelta {
+        delta(
+            index: climbSequence.index,
+            name: climbSequence.displayName,
+            divergence: nil,
+            attemptReached: climbSequence.attemptReached,
+            reference: reference,
+            attempt: attempt,
+            alignmentCost: alignmentCost
+        )
+    }
+
+    private func delta(
+        index: Int,
+        name: String,
+        divergence: BetaDivergence?,
+        attemptReached: Bool,
         reference: SectionMetrics,
         attempt: SectionMetrics?,
         alignmentCost: Double?
@@ -491,11 +573,11 @@ public struct MetricsEngine: Sendable {
             ))
         }
         return SectionDelta(
-            sectionIndex: section.index,
-            sectionName: section.displayName,
+            sectionIndex: index,
+            sectionName: name,
             deltas: deltas,
-            divergence: section.divergence,
-            attemptReached: section.attemptReached,
+            divergence: divergence,
+            attemptReached: attemptReached,
             alignmentCost: alignmentCost,
             warnings: reference.warnings + (attempt?.warnings ?? [])
         )

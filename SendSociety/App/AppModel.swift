@@ -4,32 +4,6 @@ import Observation
 import PhotosUI
 import AVFoundation
 
-/// Which comparison view is on screen.
-///
-/// **View-layer only.** Switching modes must not re-run a single pipeline
-/// stage — everything every mode needs is already in `ProcessedSession`.
-///
-/// The alpha-composited `overlay` mode was removed rather than kept as a
-/// further tab. Its known weakness was recorded in `plan.md` from the start —
-/// two differently-sized bodies superimposed read as clutter, because the wall
-/// lines up and the humans do not — and `skeletonOverlay` covers the question
-/// it was actually being used for: whether the tracker is seeing the climber.
-enum ComparisonMode: String, CaseIterable, Identifiable {
-    case sideBySide
-    case skeletonOverlay
-    case skeletonOnly
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .sideBySide: "Side by side"
-        case .skeletonOverlay: "Skeleton overlay"
-        case .skeletonOnly: "Skeleton"
-        }
-    }
-}
-
 enum ProcessingState: Equatable {
     case idle
     case running(stage: String, stageIndex: Int, fraction: Double)
