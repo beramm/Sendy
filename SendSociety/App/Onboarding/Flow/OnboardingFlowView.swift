@@ -36,11 +36,8 @@ enum OnboardingConfiguration {
     /// flow again without deleting the app or editing this file:
     ///
     ///     xcrun simctl launch <device> <bundle-id> --show-onboarding
-#if DEBUG
-    static let alwaysShowOnLaunch = true
-#else
     static let alwaysShowOnLaunch = false
-#endif
+
 
     /// Development switch for testing the artwork's shake direction.
     /// Change this to `.horizontal`, `.vertical`, or `.both`.

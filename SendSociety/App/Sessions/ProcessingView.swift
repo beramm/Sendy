@@ -15,11 +15,9 @@ struct ProcessingView: View {
         ZStack {
             AppBackground()
             VStack(spacing: 24) {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(AppTheme.accent)
-                Text(title).font(.largeTitle.bold())
-                Text(detail).font(.title3).foregroundStyle(.secondary)
+                ProcessingHoldsAnimation()
+                Text(title).font(.largeTitle.bold().monospaced())
+                Text(detail).font(.title3.monospaced()).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 if case .running(_, let index, let fraction) = model.state {
                     ProgressView(value: Double(index) + fraction, total: Double(ProcessingPipeline.stageCount))
@@ -51,6 +49,62 @@ struct ProcessingView: View {
         if case .running(let stage, _, _) = model.state { return stage }
         if case .failed = model.state { return "Your clips are still here — you can retry safely." }
         return "Preparing your comparison"
+    }
+}
+
+private struct ProcessingHoldsAnimation: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visibleHoldCount = 0
+
+    private let frameAssetNames = [
+        "ProcessingHold1",
+        "ProcessingHold2",
+        "ProcessingHold3",
+        "ProcessingHold4"
+    ]
+
+    var body: some View {
+        ZStack {
+            ForEach(frameAssetNames.indices, id: \.self) { index in
+                Image(frameAssetNames[index])
+                    .resizable()
+                    .scaledToFit()
+                    .opacity(index < visibleHoldCount ? 1 : 0)
+            }
+        }
+        .frame(maxHeight: 520)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Analysing route holds")
+        .task { await animateHolds() }
+    }
+
+    @MainActor
+    private func animateHolds() async {
+        while !Task.isCancelled {
+            withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) {
+                visibleHoldCount = 0
+            }
+
+            guard await wait(for: .milliseconds(350)) else { return }
+
+            for count in 1...4 {
+                withAnimation(.spring(response: reduceMotion ? 0.2 : 0.35, dampingFraction: 0.78)) {
+                    visibleHoldCount = count
+                }
+                guard await wait(for: .milliseconds(450)) else { return }
+            }
+
+            guard await wait(for: .milliseconds(650)) else { return }
+        }
+    }
+
+    private func wait(for duration: Duration) async -> Bool {
+        do {
+            try await Task.sleep(for: duration)
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
     }
 }
 
