@@ -26,7 +26,7 @@ struct AnalyzeOnboardingPage: View {
                     OnboardingHeadline(
                         lines: [
                             .init("AND", color: .white),
-                            .init("COMPARE!", color: OnboardingPalette.accent)
+                            .init("COMPARE!", color: AppTheme.accent)
                         ]
                     )
                     .offset(x: 151, y: 596)

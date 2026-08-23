@@ -36,11 +36,8 @@ enum OnboardingConfiguration {
     /// flow again without deleting the app or editing this file:
     ///
     ///     xcrun simctl launch <device> <bundle-id> --show-onboarding
-#if DEBUG
-    static let alwaysShowOnLaunch = ProcessInfo.processInfo.arguments.contains("--show-onboarding")
-#else
     static let alwaysShowOnLaunch = false
-#endif
+
 
     /// Development switch for testing the artwork's shake direction.
     /// Change this to `.horizontal`, `.vertical`, or `.both`.
@@ -93,7 +90,7 @@ struct OnboardingFlowView: View {
 
     var body: some View {
         ZStack {
-            OnboardingBackground()
+            AppBackground()
 
             page
                 .id(step)

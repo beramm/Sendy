@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Observation
 import PhotosUI
+import AVFoundation
 
 /// Which comparison view is on screen.
 ///
@@ -50,6 +51,7 @@ enum ClipImportState: Equatable {
 /// that nothing ever needs to address by value.
 enum AppRoute: Hashable {
     case setup
+    case processing
     case results
     /// Stage timings, statuses and warnings. **Not in the main flow** — the
     /// pipeline runs from the clips screen and lands on results. This is the
@@ -117,6 +119,16 @@ final class AppModel {
     init() {
         Task { await refresh() }
     }
+
+#if DEBUG
+    /// In-memory state for SwiftUI previews. It intentionally bypasses the
+    /// store refresh so preview fixtures never race with on-disk sessions.
+    init(previewSession: ClimbSession? = nil, previewSessions: [ClimbSession] = []) {
+        session = previewSession
+        sessions = previewSessions
+        if let previewSession { config = previewSession.config }
+    }
+#endif
 
     // MARK: Readiness
 
@@ -228,6 +240,20 @@ final class AppModel {
 
     // MARK: Clips
 
+    /// Starts a Photos import without making the presenting view wait for the
+    /// copy. Setting the slot state before creating the task lets capture pop
+    /// immediately while the setup card already knows to show its spinner.
+    func beginImport(_ item: PhotosPickerItem, role: VideoRef.Role) {
+        setImportState(.loading, for: role)
+        Task { await importPicked(item, role: role) }
+    }
+
+    /// Recording equivalent of ``beginImport(_:role:)``.
+    func beginAddingVideo(from url: URL, role: VideoRef.Role) {
+        setImportState(.loading, for: role)
+        Task { await addVideo(from: url, role: role) }
+    }
+
     /// The whole picker-to-disk path, owned by the model so the slot it belongs
     /// to is known throughout. The view used to hold one shared `importing`
     /// flag for both pickers, so two concurrent imports cleared each other's
@@ -264,6 +290,31 @@ final class AppModel {
         }
     }
 
+    /// Exports and replaces one clip while keeping the old file usable until
+    /// the replacement is safely stored. Setup stays visible and shows the
+    /// progress indicator over the affected climber card.
+    func beginTrimming(_ video: VideoRef, from startSeconds: Double, to endSeconds: Double) {
+        let role = video.role
+        setImportState(.loading, for: role)
+        Task {
+            do {
+                guard let sourceURL = await videoURL(video) else {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+                let output = try await Self.exportTrimmedVideo(
+                    sourceURL: sourceURL,
+                    startSeconds: startSeconds,
+                    endSeconds: endSeconds
+                )
+                defer { try? FileManager.default.removeItem(at: output) }
+                try await persistReplacement(output, replacing: video)
+                setImportState(.idle, for: role)
+            } catch {
+                setImportState(.failed("Could not trim the video: \(error.localizedDescription)"), for: role)
+            }
+        }
+    }
+
     private func persist(_ url: URL, role: VideoRef.Role, photoItem: PhotosPickerItem? = nil) async throws {
         guard var current = session else { return }
         // Replacing the reference deletes the old file first — overwriting the
@@ -286,6 +337,69 @@ final class AppModel {
         sessionNameSource = current.nameSource
         invalidateResults()
         await refresh()
+    }
+
+    private func persistReplacement(_ url: URL, replacing original: VideoRef) async throws {
+        guard var current = session else { return }
+        let attemptIndex: Int?
+        if original.role == .reference {
+            guard current.reference?.id == original.id else { return }
+            attemptIndex = nil
+        } else {
+            guard let index = current.attempts.firstIndex(where: { $0.id == original.id }) else { return }
+            attemptIndex = index
+        }
+
+        var replacement = try await store.importVideo(
+            from: url,
+            into: current,
+            role: original.role,
+            label: original.label
+        )
+        // Carried across rather than re-read: a passthrough export does not
+        // reliably keep the location metadata, and the clip was filmed at the
+        // same gym it was filmed at before it was trimmed.
+        replacement.coordinate = original.coordinate
+
+        if original.role == .reference {
+            current.reference = replacement
+        } else if let index = attemptIndex {
+            current.attempts[index] = replacement
+        }
+
+        try await store.save(current)
+        await store.removeVideo(session: current, video: original)
+        session = current
+        invalidateResults()
+        await refresh()
+    }
+
+    private nonisolated static func exportTrimmedVideo(
+        sourceURL: URL,
+        startSeconds: Double,
+        endSeconds: Double
+    ) async throws -> URL {
+        let duration = endSeconds - startSeconds
+        guard startSeconds >= 0, duration > 0.05 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+
+        let asset = AVURLAsset(url: sourceURL)
+        let output = URL.temporaryDirectory
+            .appendingPathComponent("trim-\(UUID().uuidString).mov")
+        nonisolated(unsafe) let exporter = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetPassthrough
+        )
+        guard let exporter else {
+            throw CocoaError(.featureUnsupported)
+        }
+        exporter.timeRange = CMTimeRange(
+            start: CMTime(seconds: startSeconds, preferredTimescale: 600),
+            duration: CMTime(seconds: duration, preferredTimescale: 600)
+        )
+        try await exporter.export(to: output, as: .mov)
+        return output
     }
 
     // MARK: Naming (task 12)

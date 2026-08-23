@@ -2,6 +2,7 @@
 import SwiftUI
 import AVFoundation
 import CoreMotion
+import PhotosUI
 
 struct CaptureView: View {
     @Environment(AppModel.self) private var model
@@ -15,68 +16,56 @@ struct CaptureView: View {
     @State private var singleTake = false
     @State private var recordedURL: URL?
     @State private var error: String?
+    @State private var libraryItem: PhotosPickerItem?
+    @State private var showingSettings = false
+    @State private var showsFramingGuide = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                CameraPreview(session: camera.session)
-                FramingGuide(rollDegrees: tilt.rollDegrees, pitchDegrees: tilt.pitchDegrees)
-                if let countdown = camera.countdown {
-                    Text("\(countdown)")
-                        .font(.system(size: 96, weight: .bold))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 8)
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                captureHeader
+
+                ZStack {
+                    CameraPreview(session: camera.session)
+
+                    if showsFramingGuide {
+                        FramingGuide(
+                            rollDegrees: tilt.rollDegrees,
+                            pitchDegrees: tilt.pitchDegrees
+                        )
+                    }
+
+                    if let countdown = camera.countdown {
+                        Text("\(countdown)")
+                            .font(.system(size: 96, weight: .bold))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 8)
+                    }
+
+                    if let error {
+                        Text(error)
+                            .font(.footnote.weight(.medium))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(.red.opacity(0.8), in: .rect(cornerRadius: 12))
+                            .padding(20)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
+                .frame(maxHeight: .infinity)
+                .clipped()
+
+                captureControls
             }
-            .frame(maxHeight: .infinity)
-
-            Form {
-                SwiftUI.Section("Trigger") {
-                    Toggle("Single continuous take (both climbers, split afterwards)", isOn: $singleTake)
-                    Stepper("Countdown: \(countdownSeconds)s", value: $countdownSeconds, in: 0 ... 30)
-                    Text(singleTake
-                         ? "One recording covers both climbers, so the camera pose is identical by construction. You split it afterwards."
-                         : "Press record, walk away, climb after the countdown. The tripod is never touched between clips.")
-                    .font(.caption)
-                }
-
-                SwiftUI.Section("Camera") {
-                    Text(camera.configurationNotes.joined(separator: " · "))
-                        .font(.caption)
-                    Button(camera.exposureLocked ? "Unlock AE/AF" : "Lock AE/AF") {
-                        camera.exposureLocked ? camera.unlockExposureAndFocus() : camera.lockExposureAndFocus()
-                    }
-                    if !camera.status.isEmpty {
-                        Text(camera.status).font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let note = camera.locationNote {
-                        // Stated, not warned about. A clip with no location is
-                        // a session named by date, which is the ordinary
-                        // outcome in a windowless gym — flagging it would put a
-                        // warning on the majority case.
-                        Text(note).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-
-                SwiftUI.Section {
-                    if camera.isRecording {
-                        Button("Stop recording", role: .destructive) { camera.stopRecording() }
-                    } else {
-                        Button(singleTake ? "Record single take" : "Record \(role == .reference ? "reference" : "attempt")") {
-                            record()
-                        }
-                        .disabled(!camera.isRunning)
-                    }
-                }
-
-                if let error {
-                    SwiftUI.Section("Error") { Text(error).foregroundStyle(.red) }
-                }
-            }
-            .frame(height: 320)
         }
-        .navigationTitle(role == .reference ? "Record reference" : "Record attempt")
-        .navigationBarTitleDisplayMode(.inline)
+        .foregroundStyle(.white)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showingSettings) { settingsSheet }
         .task {
             await camera.start()
             tilt.start()
@@ -85,13 +74,173 @@ struct CaptureView: View {
             camera.stop()
             tilt.stop()
         }
+        .onChange(of: libraryItem) { _, item in
+            guard let item else { return }
+            libraryItem = nil
+            model.beginImport(item, role: role)
+            dismiss()
+        }
         .navigationDestination(item: $recordedURL) { url in
-            if singleTake {
-                SingleTakeSplitView(url: url)
-            } else {
-                CaptureReviewView(url: url, role: role)
+            SingleTakeSplitView(url: url)
+        }
+    }
+
+    private var captureHeader: some View {
+        HStack(spacing: 22) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 25, weight: .light))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close camera")
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 10) {
+                    Capsule()
+                        .fill(.white)
+                    Capsule()
+                        .fill(role == .attempt ? .white : .white.opacity(0.25))
+                }
+                .frame(height: 8)
+
+                Text(role == .reference ? "Climber 1 of 2" : "Climber 2 of 2")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                showingSettings = true
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 26, weight: .regular))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Capture settings")
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 84)
+        .background(Color.black)
+    }
+
+    private var captureControls: some View {
+        HStack {
+            PhotosPicker(selection: $libraryItem, matching: .videos) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.black.opacity(0.75))
+                    .frame(width: 52, height: 52)
+                    .background(.white.opacity(0.86), in: .rect(cornerRadius: 15))
+            }
+            .accessibilityLabel("Choose video from library")
+
+            Spacer()
+
+            Button {
+                camera.isRecording ? camera.stopRecording() : record()
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 86, height: 86)
+
+                    if camera.isRecording {
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(.red)
+                            .frame(width: 34, height: 34)
+                    } else {
+                        Circle()
+                            .fill(.white.opacity(0.2))
+                            .frame(width: 68, height: 68)
+                            .overlay(Circle().stroke(.black.opacity(0.15), lineWidth: 1))
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!camera.isRunning && !camera.isRecording)
+            .opacity(camera.isRunning || camera.isRecording ? 1 : 0.45)
+            .accessibilityLabel(camera.isRecording ? "Stop recording" : "Start recording")
+
+            Spacer()
+
+            Color.clear
+                .frame(width: 52, height: 52)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 58)
+        .frame(height: 174)
+        .background(Color.black)
+    }
+
+    private var settingsSheet: some View {
+        NavigationStack {
+            Form {
+                SwiftUI.Section("Trigger") {
+                    Toggle(
+                        "Single continuous take",
+                        isOn: $singleTake
+                    )
+                    Stepper(
+                        "Countdown: \(countdownSeconds)s",
+                        value: $countdownSeconds,
+                        in: 0 ... 30
+                    )
+                    Text(
+                        singleTake
+                            ? "One recording covers both climbers and can be split afterwards."
+                            : "Press record, walk away, then climb after the countdown."
+                    )
+                    .font(.caption)
+                }
+
+                SwiftUI.Section("Framing") {
+                    Toggle("Show framing guide", isOn: $showsFramingGuide)
+                    Text("Use the guide to keep the complete route and wall visible.")
+                        .font(.caption)
+                }
+
+                SwiftUI.Section("Camera") {
+                    Text(camera.configurationNotes.joined(separator: " · "))
+                        .font(.caption)
+                    Button(camera.exposureLocked ? "Unlock AE/AF" : "Lock AE/AF") {
+                        camera.exposureLocked
+                            ? camera.unlockExposureAndFocus()
+                            : camera.lockExposureAndFocus()
+                    }
+                    if !camera.status.isEmpty {
+                        Text(camera.status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let note = camera.locationNote {
+                        // Stated, not warned about. A clip with no location is
+                        // a session named by date, which is the ordinary
+                        // outcome in a windowless gym — flagging it would put a
+                        // warning on the majority case.
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let error {
+                    SwiftUI.Section("Error") {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Capture settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingSettings = false }
+                }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 
     private func record() {
@@ -99,7 +248,12 @@ struct CaptureView: View {
         Task {
             do {
                 let url = try await camera.startRecording(afterSeconds: countdownSeconds)
-                recordedURL = url
+                if singleTake {
+                    recordedURL = url
+                } else {
+                    model.beginAddingVideo(from: url, role: role)
+                    dismiss()
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -190,7 +344,7 @@ struct CameraPreview: UIViewRepresentable {
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.layer.session = session
-        view.layer.videoGravity = .resizeAspect
+        view.layer.videoGravity = .resizeAspectFill
         return view
     }
 
@@ -201,32 +355,6 @@ struct CameraPreview: UIViewRepresentable {
     final class PreviewView: UIView {
         override static var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         override var layer: AVCaptureVideoPreviewLayer { super.layer as! AVCaptureVideoPreviewLayer }
-    }
-}
-
-struct CaptureReviewView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let url: URL
-    let role: VideoRef.Role
-
-    var body: some View {
-        Form {
-            SwiftUI.Section("Recorded") {
-                Text(url.lastPathComponent).font(.caption)
-                Button("Use as \(role == .reference ? "reference" : "attempt")") {
-                    Task {
-                        await model.addVideo(from: url, role: role)
-                        dismiss()
-                    }
-                }
-                Button("Discard", role: .destructive) {
-                    try? FileManager.default.removeItem(at: url)
-                    dismiss()
-                }
-            }
-        }
-        .navigationTitle("Review")
     }
 }
 
@@ -301,6 +429,14 @@ struct SingleTakeSplitView: View {
         if let error = session.error { throw error }
         return output
     }
+}
+
+#Preview("Camera · reference") {
+    NavigationStack {
+        CaptureView(role: .reference)
+    }
+    .environment(AppModel())
+    .preferredColorScheme(.dark)
 }
 
 #endif

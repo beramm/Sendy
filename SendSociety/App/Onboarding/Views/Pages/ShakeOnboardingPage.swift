@@ -37,7 +37,7 @@ struct ShakeOnboardingPage: View {
                     OnboardingHeadline(
                         lines: [
                             .init(firstLine, color: .white),
-                            .init(accentLine, color: OnboardingPalette.accent)
+                            .init(accentLine, color: AppTheme.accent)
                         ]
                     )
                     .offset(x: 42, y: 104 + supportingContentOffset)
@@ -73,7 +73,7 @@ struct ShakeOnboardingPage: View {
             }
             
             if usesWelcomeEntrance {
-                OnboardingPalette.accent
+                AppTheme.accent
                     .opacity(greenBackdropOpacity)
                     .ignoresSafeArea()
             }

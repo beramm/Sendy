@@ -10,7 +10,7 @@ struct GoClimbOnboardingPage: View {
                     OnboardingHeadline(
                         lines: [
                             .init("GO CLIMB", color: .white),
-                            .init("YOUR WAY!", color: OnboardingPalette.accent)
+                            .init("YOUR WAY!", color: AppTheme.accent)
                         ]
                     )
                     .offset(x: 52, y: 124)
