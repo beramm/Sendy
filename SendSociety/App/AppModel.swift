@@ -18,7 +18,6 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
     case sideBySide
     case skeletonOverlay
     case skeletonOnly
-    case skeleton3D
 
     var id: String { rawValue }
 
@@ -27,7 +26,6 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
         case .sideBySide: "Side by side"
         case .skeletonOverlay: "Skeleton overlay"
         case .skeletonOnly: "Skeleton"
-        case .skeleton3D: "Skeleton 3D"
         }
     }
 }
@@ -78,6 +76,20 @@ final class AppModel {
     /// is visible rather than merely believed impossible.
     var pipelineRunCount = 0
     var lastError: String?
+    /// **Wall clock from tapping Process to the results being on screen**, in
+    /// seconds — not the sum of the stage timings.
+    ///
+    /// The stage report already says where the time went inside the pipeline,
+    /// but a stage table that adds up to 4s does not answer "why did that take
+    /// half a minute". This is the number a gym trip is actually spent on:
+    /// video decode, Vision, and everything between the tap and the output.
+    /// Nil until a run finishes; a cancelled or failed run leaves the previous
+    /// value alone rather than reporting a partial one.
+    var lastProcessingSeconds: Double?
+    /// True while `lastProcessingSeconds` describes a run that read pose from
+    /// cache. A cached reprocess and a cold first run differ by an order of
+    /// magnitude, and a bare number that silently means either is misleading.
+    var lastProcessingWasCached = false
     var analysisProviderName = "Template"
     /// Navigation stack for the main flow, so creating a session can land the
     /// user on the clips screen without them having to find a row.
@@ -87,8 +99,22 @@ final class AppModel {
     /// Sources with pose already cached for every video, so the picker can say
     /// which switches are instant and which mean re-extracting.
     var cachedPoseSources: Set<PoseSource> = []
+    /// Where the current session's name came from, so the clips screen can say
+    /// so plainly. `.date` is stated, never apologised for.
+    var sessionNameSource: SessionNameSource = .date
 
     private var processingTask: Task<Void, Never>?
+    private let videoLocationReader = VideoLocationReader()
+
+    /// Cache first, network second, date last — the ordering lives in
+    /// `SessionNamer`; this only supplies the geocoder it may or may not reach.
+    private var namer: SessionNamer {
+        #if os(iOS)
+        SessionNamer(geocoder: MapKitReverseGeocoder())
+        #else
+        SessionNamer()
+        #endif
+    }
 
     init() {
         Task { await refresh() }
@@ -158,10 +184,20 @@ final class AppModel {
     /// Creating a session lands on the clips screen. There is nothing to do
     /// with a session that has no clips, so making the user find a row first
     /// is a step that only exists to be skipped.
-    func newSession(name: String) async {
+    /// A nil or empty name means the app names it. The session starts with a
+    /// date name because the coordinate lives in the clips, which do not exist
+    /// yet — it re-resolves in `persist` once a reference lands.
+    func newSession(name: String?) async {
+        let typed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: ResolvedSessionName = typed.isEmpty
+            ? SessionNamer.dateName(Date())
+            : ResolvedSessionName(name: typed, source: .user)
         do {
-            let created = try await store.create(name: name)
+            var created = try await store.create(name: resolved.name)
+            created.nameSource = resolved.source
+            try await store.save(created)
             session = created
+            sessionNameSource = created.nameSource
             config = created.config
             processed = nil
             state = .idle
@@ -176,6 +212,7 @@ final class AppModel {
 
     func open(_ s: ClimbSession) {
         session = s
+        sessionNameSource = s.nameSource
         config = s.config
         processed = nil
         state = .idle
@@ -233,7 +270,7 @@ final class AppModel {
                 return
             }
             defer { try? FileManager.default.removeItem(at: movie.url) }
-            try await persist(movie.url, role: role)
+            try await persist(movie.url, role: role, photoItem: item)
             setImportState(.idle, for: role)
         } catch {
             setImportState(.failed(error.localizedDescription), for: role)
@@ -278,7 +315,7 @@ final class AppModel {
         }
     }
 
-    private func persist(_ url: URL, role: VideoRef.Role) async throws {
+    private func persist(_ url: URL, role: VideoRef.Role, photoItem: PhotosPickerItem? = nil) async throws {
         guard var current = session else { return }
         // Replacing the reference deletes the old file first — overwriting the
         // ref alone would orphan a video inside the session directory forever.
@@ -287,14 +324,17 @@ final class AppModel {
             current.reference = nil
         }
         let label = role == .reference ? "Reference" : "Attempt \(current.attempts.count + 1)"
-        let ref = try await store.importVideo(from: url, into: current, role: role, label: label)
+        var ref = try await store.importVideo(from: url, into: current, role: role, label: label)
+        ref.coordinate = await coordinate(of: url, photoItem: photoItem)
         if role == .reference {
             current.reference = ref
         } else {
             current.addAttempt(ref)
         }
+        await resolveName(of: &current, using: ref)
         try await store.save(current)
         session = current
+        sessionNameSource = current.nameSource
         invalidateResults()
         await refresh()
     }
@@ -310,12 +350,16 @@ final class AppModel {
             attemptIndex = index
         }
 
-        let replacement = try await store.importVideo(
+        var replacement = try await store.importVideo(
             from: url,
             into: current,
             role: original.role,
             label: original.label
         )
+        // Carried across rather than re-read: a passthrough export does not
+        // reliably keep the location metadata, and the clip was filmed at the
+        // same gym it was filmed at before it was trimmed.
+        replacement.coordinate = original.coordinate
 
         if original.role == .reference {
             current.reference = replacement
@@ -356,6 +400,78 @@ final class AppModel {
         )
         try await exporter.export(to: output, as: .mov)
         return output
+    }
+
+    // MARK: Naming (task 12)
+
+    /// **File first, Photos second.** The file read is free and silent; the
+    /// Photos read costs a library permission prompt, so it is only reached
+    /// when the file carried nothing — which for a `PHPicker` export is most of
+    /// the time, because the picker strips location on the way out.
+    private func coordinate(of url: URL, photoItem: PhotosPickerItem?) async -> Coordinate2D? {
+        if let fromFile = await videoLocationReader.coordinate(of: url) { return fromFile }
+        #if os(iOS)
+        if let photoItem { return await PhotoLibraryLocationReader.coordinate(for: photoItem) }
+        #endif
+        return nil
+    }
+
+    /// Names a session from where it was filmed, if it is still the app's name
+    /// to choose.
+    ///
+    /// The reference clip decides, because that is the climb the session is
+    /// about; an attempt only gets a say when there is no reference coordinate
+    /// yet. A session that already has a coordinate is not re-resolved — the
+    /// gym did not move between clips.
+    private func resolveName(of session: inout ClimbSession, using ref: VideoRef) async {
+        guard !session.hasUserName else { return }
+        guard let coordinate = ref.coordinate else { return }
+        let isBetterSource = ref.role == .reference || session.coordinate == nil
+        guard isBetterSource, session.coordinate != coordinate else { return }
+
+        session.coordinate = coordinate
+        let resolution = await namer.resolve(
+            coordinate: coordinate,
+            capturedAt: session.createdAt,
+            book: await store.placemarks()
+        )
+        if let book = resolution.updatedBook {
+            try? await store.savePlacemarks(book)
+        }
+        // A date result changes nothing: the session already has a date name,
+        // and rewriting it would only churn the row.
+        guard resolution.name.source != .date else { return }
+        session.name = resolution.name.name
+        session.nameSource = resolution.name.source
+    }
+
+    /// Renaming is the correction mechanism for the whole naming feature, so it
+    /// does two things: it locks the session's name against any later resolve,
+    /// and it teaches the placemark book — so the *next* session at this gym
+    /// inherits the name the climber actually uses rather than Apple's label
+    /// for the building.
+    func renameSession(to name: String) async {
+        guard var current = session else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != current.name else { return }
+
+        current.name = trimmed
+        current.nameSource = .user
+        if let coordinate = current.coordinate {
+            await store.rememberPlacemark(
+                name: SessionNamer.placeComponent(of: trimmed),
+                at: coordinate,
+                confirmedByUser: true
+            )
+        }
+        do {
+            try await store.save(current)
+            session = current
+            sessionNameSource = current.nameSource
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Removes a clip and everything derived from it. Labels of the surviving
@@ -400,6 +516,10 @@ final class AppModel {
         let config = self.config
         let attemptIndex = self.attemptIndex
         state = .running(stage: "Starting", stageIndex: 0, fraction: 0)
+        // Started here rather than inside the pipeline: the question is how
+        // long the user waits, which includes building the provider and
+        // whatever the pipeline does before its first stage report.
+        let submittedAt = Date()
         processingTask = Task { [weak self] in
             guard let self else { return }
             // No extractor override: the pipeline picks one from the session's
@@ -424,6 +544,9 @@ final class AppModel {
                 }
                 self.processed = result
                 self.pipelineRunCount += 1
+                self.lastProcessingSeconds = Date().timeIntervalSince(submittedAt)
+                self.lastProcessingWasCached = result.stages
+                    .first { $0.name == "Pose extraction" }?.detail.contains("cached") == true
                 self.state = .done
                 self.analysisProviderName = result.analyses.first?.source ?? "Template"
                 var updated = session
@@ -440,6 +563,19 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// Submit-to-output time, formatted, or nil before the first finished run.
+    ///
+    /// Says whether pose came from cache, because the two numbers are not
+    /// comparable: a cold run pays for Vision over the whole clip and a
+    /// reprocess does not.
+    var processingTimeSummary: String? {
+        guard let seconds = lastProcessingSeconds else { return nil }
+        let time = seconds < 10
+            ? String(format: "%.1fs", seconds)
+            : String(format: "%.0fs", seconds)
+        return "\(time) \(lastProcessingWasCached ? "(cached pose)" : "(full extraction)")"
     }
 
     func cancelProcessing() {

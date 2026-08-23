@@ -63,6 +63,34 @@ struct PipelineReportView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    // **Submit to output, and the gap between it and the
+                    // stages.** The stage rows only cover the pipeline; the
+                    // wait a climber standing at a wall actually experiences
+                    // starts at the tap. When the two disagree, the difference
+                    // is where to look next.
+                    if let seconds = model.lastProcessingSeconds {
+                        let staged = processed.stages.reduce(0) { $0 + $1.seconds }
+                        HStack {
+                            Text("Submit → output").bold()
+                            Spacer()
+                            Text(String(format: "%.2fs", seconds))
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                        HStack {
+                            Text("Outside the stages above")
+                            Spacer()
+                            Text(String(format: "%.2fs", max(0, seconds - staged)))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        Text(model.lastProcessingWasCached
+                             ? "Pose came from cache. A first run on these clips pays for Vision over the whole video and is not comparable."
+                             : "Full extraction — Vision ran over both clips.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if !processed.warnings.isEmpty {

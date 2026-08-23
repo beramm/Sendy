@@ -21,6 +21,15 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     case hipTwist
     case reachMargin
     case sectionDwellRatio
+    // Posture — added after a coaching review said the app measured effort but
+    // not shape. A coach reads the pelvis first, then the knee, then the arm;
+    // these are those reads, in that order.
+    case pelvisTilt
+    case pelvisTurn
+    case torsoLean
+    case kneeDrive
+    case pullingArmTime
+    case diagonalLoadBalance
 
     public var displayName: String {
         switch self {
@@ -39,6 +48,12 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .hipTwist: "Hip twist"
         case .reachMargin: "Reach extension at the latch"
         case .sectionDwellRatio: "Time on this move"
+        case .pelvisTilt: "Hips off level"
+        case .pelvisTurn: "Hips turned into the wall"
+        case .torsoLean: "Lean off the plumb line"
+        case .kneeDrive: "Knee driven past the toe"
+        case .pullingArmTime: "Time pulling on the arms"
+        case .diagonalLoadBalance: "Diagonal load imbalance"
         }
     }
 
@@ -46,13 +61,14 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     /// `MetricUnitsTests`, which fails the build if one appears.
     public var unit: String {
         switch self {
-        case .hipDistanceMean, .hipDistancePeak, .comPathLength, .reachMargin: "body-lengths"
+        case .hipDistanceMean, .hipDistancePeak, .comPathLength, .reachMargin, .kneeDrive: "body-lengths"
         case .comPeakVelocity: "body-lengths/s"
         case .straightArmRatio, .loadAsymmetry, .armLoadShare, .armLoadPeak,
-             .unweightedFootTime, .feetSetBeforeReach: "%"
+             .unweightedFootTime, .feetSetBeforeReach, .pullingArmTime,
+             .diagonalLoadBalance: "%"
         case .footCommitmentSeconds: "s"
         case .footPlacementCount: "count"
-        case .hipTwist: "°"
+        case .hipTwist, .pelvisTilt, .pelvisTurn, .torsoLean: "°"
         case .sectionDwellRatio: "×"
         }
     }
@@ -64,11 +80,15 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .hipDistanceMean, .hipDistancePeak, .comPathLength, .loadAsymmetry,
              .footPlacementCount, .reachMargin, .sectionDwellRatio,
              .armLoadShare, .armLoadPeak, .unweightedFootTime,
-             .footCommitmentSeconds: true
+             .footCommitmentSeconds, .pelvisTilt, .torsoLean, .pullingArmTime,
+             .diagonalLoadBalance: true
         // Setting your feet before you move is the thing you want *more* of.
         case .feetSetBeforeReach: false
         case .straightArmRatio: false
         case .comPeakVelocity, .hipTwist: false
+        // Turning a hip in and driving a knee past the toe are what the coach
+        // demonstrates *instead* of pulling. More of them is the point.
+        case .pelvisTurn, .kneeDrive: false
         }
     }
 
@@ -270,6 +290,11 @@ public struct SectionDelta: Sendable, Codable, Hashable {
         case .footPlacementCount: scale = 3.0
         case .hipTwist: scale = 30.0
         case .sectionDwellRatio: scale = 1.0
+        case .pelvisTilt, .torsoLean: scale = 15.0
+        case .pelvisTurn: scale = 25.0
+        case .kneeDrive: scale = 0.4
+        case .pullingArmTime: scale = 0.3
+        case .diagonalLoadBalance: scale = 0.25
         }
         return d.magnitude / scale * d.confidence
     }

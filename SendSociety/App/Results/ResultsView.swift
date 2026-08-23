@@ -127,7 +127,7 @@ struct ResultsView: View {
                 Spacer()
                 // Instrumentation for task 2.9: this number must not change
                 // when the mode picker changes.
-                Text("pipeline runs: \(model.pipelineRunCount) · \(processed.analyses.first?.source ?? "—")")
+                Text("pipeline runs: \(model.pipelineRunCount) · \(processed.analyses.first?.source ?? "—")\(model.processingTimeSummary.map { " · \($0)" } ?? "")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -162,11 +162,6 @@ struct ResultsView: View {
                 route: processed.route,
                 overlays: overlays,
                 wallPlate: processed.wallPlate?.image
-            )
-        case .skeleton3D:
-            Skeleton3DComparisonView(
-                referenceFrame: processed.referencePose3D?.frame(at: frames.reference),
-                attemptFrame: frames.attempt.flatMap { processed.attemptPose3D?.frame(at: $0) }
             )
         case .sideBySide:
             HStack(spacing: 4) {
@@ -581,6 +576,9 @@ struct OverlayToggles: View {
                 Toggle("COM", isOn: $overlays.centreOfMass)
                 Toggle("BOS", isOn: $overlays.baseOfSupport)
                 Toggle("Load", isOn: $overlays.limbLoad)
+                Toggle("Hips", isOn: $overlays.pelvisTriangle)
+                Toggle("Plumb", isOn: $overlays.plumbLine)
+                Toggle("Knees", isOn: $overlays.kneeLine)
                 if showsDivergence { Toggle("Diff", isOn: $overlays.divergenceVectors) }
                 if showsBackdrop { Toggle("Wall", isOn: $overlays.wallBackdrop) }
             }
@@ -591,6 +589,9 @@ struct OverlayToggles: View {
                 Toggle("Centre of mass", isOn: $overlays.centreOfMass)
                 Toggle("Base of support", isOn: $overlays.baseOfSupport)
                 Toggle("Limb load", isOn: $overlays.limbLoad)
+                Toggle("Pelvis triangle", isOn: $overlays.pelvisTriangle)
+                Toggle("Plumb line", isOn: $overlays.plumbLine)
+                Toggle("Knee over toe", isOn: $overlays.kneeLine)
                 if showsDivergence { Toggle("Divergence", isOn: $overlays.divergenceVectors) }
                 if showsBackdrop { Toggle("Wall backdrop", isOn: $overlays.wallBackdrop) }
             }
@@ -609,6 +610,14 @@ struct OverlayToggles: View {
         // A three-state marker nobody can read is a two-state marker plus
         // confusion. The key costs one line and answers the question at the
         // point it gets asked.
+        if overlays.pelvisTriangle || overlays.plumbLine {
+            Text("Pelvis triangle = hips + pubic bone · yellow = your line, white dashed = vertical")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+
         if overlays.centreOfMass {
             Text("COM  filled = inside BOS · red = outside · white dashed = no polygon")
                 .font(.caption2)

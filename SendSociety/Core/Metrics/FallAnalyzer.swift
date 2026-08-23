@@ -293,12 +293,22 @@ public struct FallAnalyzer: Sendable {
                    let centroid = polygonCentroid(m.baseOfSupport.vertices) {
                     let v = metrics.scale.iso.vector(from: centroid, to: com)
                     if abs(v.x) > abs(v.y) * config.barnDoorLateralRatio {
+                        // Which way it opened, when the contacts license
+                        // saying so. A coach reads this off the hip before the
+                        // climber comes off: one hand and one foot on the same
+                        // side, and the free side swings out. `openSide` is nil
+                        // in every other configuration, so this sentence only
+                        // appears where the geometry actually forces it.
+                        var detail = "The centre of mass left sideways rather than downward — the signature of a barn door."
+                        if let side = m.posture.pelvis?.openSide {
+                            detail += " Your loaded hand and foot were both on your \(side.opposite.displayName) side, so your \(side.displayName) side had nothing holding it in — which is the side you swung out on."
+                        }
                         mechanical.append(FallSignal(
                             kind: .barnDoor,
                             status: .mechanical,
                             sectionIndex: sectionOf(exit),
                             frameIndex: exit,
-                            detail: "The centre of mass left sideways rather than downward — the signature of a barn door.",
+                            detail: detail,
                             value: abs(v.x) / metrics.scale.torsoLength
                         ))
                     }

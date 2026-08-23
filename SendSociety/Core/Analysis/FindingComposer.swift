@@ -167,6 +167,45 @@ public struct FindingComposer: Sendable {
             ))
         }
 
+        // The coach's own read, in his own order: the pelvis explains the arm.
+        // A hip that stays square to the wall leaves the arm to lever the body
+        // in, and the lat angle is where that shows up. Two measurements, one
+        // mechanism — which is the bar for naming a cause here.
+        if let pulling = worse(.pullingArmTime), let turn = worse(.pelvisTurn), out.isEmpty {
+            out.append(Finding(
+                claim: "You stayed square to the wall and pulled yourself in with your arms.",
+                because: "They turned a hip into the wall instead, which puts the reach on the legs rather than on the lats.",
+                drill: "Before the reach, turn the hip on your reaching side towards the wall until your shoulder comes with it.",
+                metrics: [pulling, turn],
+                attemptIsWorse: true
+            ))
+        }
+
+        // Leaning off the plumb line loads one arm and the opposite leg. The
+        // coach reads this off a single still; here it is two measurements that
+        // have to agree before anything is said.
+        if let lean = worse(.torsoLean), let asymmetry = worse(.loadAsymmetry), out.isEmpty {
+            out.append(Finding(
+                claim: "You hung off to one side rather than under your hands.",
+                because: "Your body sat further off vertical than theirs, so one arm and the opposite leg carried most of the move.",
+                drill: "Get your hips under the hand you are pulling on before you move — the weight should feel even across both arms.",
+                metrics: [lean, asymmetry],
+                attemptIsWorse: true
+            ))
+        }
+
+        // Hips off level plus load on the arms: the pelvis dropping on one side
+        // is what pulls the weight back onto the hands.
+        if let tilt = worse(.pelvisTilt), let arms = worse(.armLoadShare), out.isEmpty {
+            out.append(Finding(
+                claim: "One hip dropped through this move.",
+                because: "With the pelvis tilted, the low side stops pressing into its foot and the weight goes back onto your hands.",
+                drill: "Keep the hips level as you move up — press the low foot down until both hips sit on one line.",
+                metrics: [tilt, arms],
+                attemptIsWorse: true
+            ))
+        }
+
         // Something done well. Worth saying — an app that only ever finds fault
         // is one people stop reading.
         if out.isEmpty, let path = better(.comPathLength), let arms = better(.armLoadShare) {
@@ -286,6 +325,54 @@ public struct FindingComposer: Sendable {
                     ? "You latched the hold from further out than they did."
                     : "You got your body closer to the hold before taking it than they did.",
                 drill: worse ? "Bring your hips towards the hold before your hand leaves." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .pelvisTilt:
+            return Finding(
+                claim: worse
+                    ? "One of your hips sat\(much) lower than the other through this move."
+                    : "You kept your hips more level than they did.",
+                drill: worse ? "Press down through the low foot until both hips sit on the same line." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .pelvisTurn:
+            return Finding(
+                claim: worse
+                    ? "You stayed squarer to the wall than they did."
+                    : "You turned a hip into the wall more than they did.",
+                drill: worse ? "Try the move again with the hip on your reaching side turned in to the wall." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .torsoLean:
+            return Finding(
+                claim: worse
+                    ? "You hung\(much) further off vertical than they did."
+                    : "You stayed more directly under your hands than they did.",
+                drill: worse ? "Move your hips under the hand you are pulling on before you commit to the reach." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .kneeDrive:
+            return Finding(
+                claim: worse
+                    ? "You kept your knees stacked over your feet where they dropped a knee in."
+                    : "You drove a knee across your foot to get in close, as they did.",
+                drill: worse ? "Turn the knee in across the toe and let the hip follow it to the wall." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .pullingArmTime:
+            return Finding(
+                claim: worse
+                    ? "You spent\(much) more of this move actually pulling than they did."
+                    : "You pulled less than they did to get through this.",
+                drill: worse ? "Look for the foot that lets you stand up into the hold instead of pulling in to it." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .diagonalLoadBalance:
+            return Finding(
+                claim: worse
+                    ? "Your weight sat on one diagonal — one hand and the opposite foot took the move."
+                    : "You spread the move across both diagonals more evenly than they did.",
+                drill: worse ? "Set the quiet foot and press it as you pull, so both diagonals share the move." : nil,
                 metrics: [d], attemptIsWorse: worse
             )
         case .sectionDwellRatio:

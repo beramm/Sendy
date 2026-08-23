@@ -16,6 +16,11 @@ public struct FrameMetrics: Sendable, Codable, Hashable {
     public var rightElbowDegrees: Double?
     public var hipTwistDegrees: Double?
     public var activeContacts: Set<JointName>
+    /// Pelvis, plumb line, knee and lat-lever reads. Defaulted rather than
+    /// required so every existing construction site still compiles, and
+    /// `Optional`-typed inside so a decoded older session comes back with
+    /// posture absent instead of failing to decode at all.
+    public var posture: PostureFrame = .unavailable
 
     public init(
         index: Int,
@@ -29,7 +34,8 @@ public struct FrameMetrics: Sendable, Codable, Hashable {
         leftElbowDegrees: Double?,
         rightElbowDegrees: Double?,
         hipTwistDegrees: Double?,
-        activeContacts: Set<JointName>
+        activeContacts: Set<JointName>,
+        posture: PostureFrame = .unavailable
     ) {
         self.index = index
         self.timeSeconds = timeSeconds
@@ -43,6 +49,27 @@ public struct FrameMetrics: Sendable, Codable, Hashable {
         self.rightElbowDegrees = rightElbowDegrees
         self.hipTwistDegrees = hipTwistDegrees
         self.activeContacts = activeContacts
+        self.posture = posture
+    }
+
+    /// Adding a stored property to a `Codable` struct orphans every session
+    /// already on disk — the same failure `TuningConfig` documents at length.
+    /// Decoded leniently for that reason.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        index = try c.decode(Int.self, forKey: .index)
+        timeSeconds = try c.decode(Double.self, forKey: .timeSeconds)
+        com = try c.decodeIfPresent(Point2D.self, forKey: .com)
+        comConfidence = try c.decode(Double.self, forKey: .comConfidence)
+        comSpeed = try c.decodeIfPresent(Double.self, forKey: .comSpeed)
+        load = try c.decode(LimbLoad.self, forKey: .load)
+        baseOfSupport = try c.decode(BaseOfSupport.self, forKey: .baseOfSupport)
+        hipDepth = try c.decode(DepthEstimate.self, forKey: .hipDepth)
+        leftElbowDegrees = try c.decodeIfPresent(Double.self, forKey: .leftElbowDegrees)
+        rightElbowDegrees = try c.decodeIfPresent(Double.self, forKey: .rightElbowDegrees)
+        hipTwistDegrees = try c.decodeIfPresent(Double.self, forKey: .hipTwistDegrees)
+        activeContacts = try c.decode(Set<JointName>.self, forKey: .activeContacts)
+        posture = try c.decodeIfPresent(PostureFrame.self, forKey: .posture) ?? .unavailable
     }
 }
 
@@ -87,6 +114,8 @@ public struct MetricsEngine: Sendable {
         )
         let comEstimator = COMEstimator()
         let loadEstimator = LoadEstimator()
+        let postureEstimator = PostureEstimator()
+        let hipWidth = postureEstimator.referenceHipWidth(sequence: sequence, scale: scale, config: config)
 
         var frames: [FrameMetrics] = []
         var previousCOM: Point2D?
@@ -126,7 +155,15 @@ public struct MetricsEngine: Sendable {
                 leftElbowDegrees: elbowAngle(frame, side: .left, scale: scale),
                 rightElbowDegrees: elbowAngle(frame, side: .right, scale: scale),
                 hipTwistDegrees: hipTwist(frame, scale: scale),
-                activeContacts: active
+                activeContacts: active,
+                posture: postureEstimator.measure(
+                    frame: frame,
+                    load: load,
+                    activeContacts: active,
+                    scale: scale,
+                    hipWidthReference: hipWidth,
+                    config: config
+                )
             ))
         }
 
@@ -343,6 +380,66 @@ public struct MetricsEngine: Sendable {
         } else {
             values[.reachMargin] = .unavailable
         }
+
+        // Posture, in the order a coach reads it: pelvis, knee, arm.
+        //
+        // These are aggregated per move like everything else here, and compared
+        // only per sequence — a mean tilt over a move is a shape, and a shape is
+        // the thing being coached.
+        let pelvises = frames.compactMap(\.posture.pelvis)
+        let pelvisCoverage = Double(pelvises.count) / Double(frames.count)
+        if let tilt = pelvises.map({ abs($0.tiltDegrees) }).mean {
+            values[.pelvisTilt] = MetricValue(value: tilt, confidence: pelvisCoverage)
+        } else {
+            values[.pelvisTilt] = .unavailable
+        }
+
+        // Turn is confidence-weighted rather than averaged flat: near square the
+        // estimate is arbitrary, and averaging arbitrary numbers with real ones
+        // produces a number that looks measured.
+        let turns = pelvises.compactMap { p -> (Double, Double)? in
+            guard let t = p.turnDegrees else { return nil }
+            return (t, p.turnConfidence)
+        }
+        let turnWeight = turns.map(\.1).reduce(0, +)
+        if turnWeight > 1e-6 {
+            let weighted = turns.map { $0 * $1 }.reduce(0, +) / turnWeight
+            values[.pelvisTurn] = MetricValue(
+                value: weighted,
+                confidence: (turnWeight / Double(max(1, turns.count))) * pelvisCoverage
+            )
+        } else {
+            values[.pelvisTurn] = .unavailable
+            warnings.append("Hip rotation was unmeasurable on this move — the pelvis stayed close to square to the camera, where hip width barely changes with angle.")
+        }
+
+        let leans = frames.compactMap(\.posture.torsoLeanDegrees).map(abs)
+        values[.torsoLean] = leans.isEmpty
+            ? .unavailable
+            : MetricValue(value: leans.mean!, confidence: Double(leans.count) / Double(frames.count))
+
+        let kneeDrives = frames.compactMap(\.posture.kneeDriveBodyLengths)
+        values[.kneeDrive] = kneeDrives.isEmpty
+            ? .unavailable
+            : MetricValue(value: kneeDrives.max()!, confidence: Double(kneeDrives.count) / Double(frames.count))
+
+        // Pulling time, not bent-arm time. A bent arm holding nothing is a
+        // shake-out; `PostureEstimator` requires a bent elbow, a levered lat and
+        // load on that hand before it counts one.
+        if !onWall.isEmpty {
+            let pulling = onWall.filter { !$0.posture.pullingHands.isEmpty }.count
+            values[.pullingArmTime] = MetricValue(
+                value: Double(pulling) / Double(onWall.count),
+                confidence: Double(onWall.count) / Double(frames.count)
+            )
+        } else {
+            values[.pullingArmTime] = .unavailable
+        }
+
+        let diagonals = onWall.compactMap(\.posture.diagonalImbalance)
+        values[.diagonalLoadBalance] = diagonals.isEmpty
+            ? .unavailable
+            : MetricValue(value: diagonals.mean!, confidence: comCoverage)
 
         // Dwell is a cross-climber ratio, filled in when the delta is built.
         values[.sectionDwellRatio] = .unavailable

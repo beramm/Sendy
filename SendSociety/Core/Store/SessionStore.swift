@@ -10,7 +10,6 @@ import UniformTypeIdentifiers
 ///   session.json
 ///   videos/<video-uuid>.mov
 ///   poses/<video-uuid>.json      ← the pose cache
-///   poses3d/<video-uuid>.json    ← visualization-only 3D pose cache
 ///   plates/<video-uuid>-<key>.png ← the wall backdrop
 /// ```
 ///
@@ -67,11 +66,6 @@ public actor SessionStore {
             .appendingPathComponent("\(video.id.uuidString)-\(source.rawValue).json")
     }
 
-    public func pose3DURL(session: ClimbSession, video: VideoRef) -> URL {
-        directory(for: session.id).appendingPathComponent("poses3d", isDirectory: true)
-            .appendingPathComponent("\(video.id.uuidString).json")
-    }
-
     /// **Keyed by the plate's own tuning fields, not by the whole config.**
     ///
     /// The plate depends on the video, the sample count, the mask padding and
@@ -98,7 +92,6 @@ public actor SessionStore {
         let dir = directory(for: session.id)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("videos"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("poses"), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: dir.appendingPathComponent("poses3d"), withIntermediateDirectories: true)
         try save(session)
         return session
     }
@@ -154,7 +147,6 @@ public actor SessionStore {
         for source in PoseSource.allCases {
             try? FileManager.default.removeItem(at: poseURL(session: session, video: video, source: source))
         }
-        try? FileManager.default.removeItem(at: pose3DURL(session: session, video: video))
         // Plates are keyed by tuning as well as by video, so there may be
         // several. Sweep the directory by prefix rather than guessing keys.
         let plates = directory(for: session.id).appendingPathComponent("plates", isDirectory: true)
@@ -184,29 +176,6 @@ public actor SessionStore {
 
     public func hasCachedPose(session: ClimbSession, video: VideoRef, source: PoseSource) -> Bool {
         FileManager.default.fileExists(atPath: poseURL(session: session, video: video, source: source).path)
-    }
-
-    // MARK: 3D pose cache
-
-    public func cachedPose3D(session: ClimbSession, video: VideoRef) -> PoseSequence3D? {
-        let url = pose3DURL(session: session, video: video)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard let sequence = try? JSONDecoder().decode(PoseSequence3D.self, from: data),
-              sequence.schemaVersion == PoseSequence3D.currentSchemaVersion else {
-            return nil
-        }
-        return sequence
-    }
-
-    public func cachePose3D(_ sequence: PoseSequence3D, session: ClimbSession, video: VideoRef) throws {
-        let url = pose3DURL(session: session, video: video)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(sequence)
-        try data.write(to: url, options: .atomic)
-    }
-
-    public func hasCachedPose3D(session: ClimbSession, video: VideoRef) -> Bool {
-        cachedPose3D(session: session, video: video) != nil
     }
 
     /// Which sources already have pose cached for every video in a session, so
@@ -265,6 +234,31 @@ public actor SessionStore {
 
     public func hasCachedPlate(session: ClimbSession, video: VideoRef, config: TuningConfig) -> Bool {
         FileManager.default.fileExists(atPath: plateURL(session: session, video: video, config: config, extension: "png").path)
+    }
+
+    // MARK: Placemark book (task 12.3)
+
+    /// **Not per session.** The whole point of the cache is that a gym is
+    /// resolved once and every later session there is offline, so it lives at
+    /// the store root alongside the saved configs.
+    var placemarksURL: URL { root.appendingPathComponent("placemarks.json") }
+
+    public func placemarks() -> PlacemarkBook {
+        guard let data = try? Data(contentsOf: placemarksURL) else { return PlacemarkBook() }
+        return (try? JSONDecoder().decode(PlacemarkBook.self, from: data)) ?? PlacemarkBook()
+    }
+
+    public func savePlacemarks(_ book: PlacemarkBook) throws {
+        try JSONEncoder().encode(book).write(to: placemarksURL, options: .atomic)
+    }
+
+    /// Records a name against a coordinate. Used by the geocode path and by
+    /// renaming — the second is what makes a corrected name stick for the next
+    /// visit, so `confirmedByUser` is the difference that matters.
+    public func rememberPlacemark(name: String, at coordinate: Coordinate2D, confirmedByUser: Bool) {
+        var book = placemarks()
+        book.remember(name: name, at: coordinate, confirmedByUser: confirmedByUser)
+        try? savePlacemarks(book)
     }
 
     // MARK: Saved tuning configs

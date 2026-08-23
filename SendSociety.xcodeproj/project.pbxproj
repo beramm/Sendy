@@ -258,7 +258,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Records the reference climb and your attempt.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Names a session after the gym you filmed it at. Used for the name only; your clips never leave the device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed, and reads where a clip was filmed so a session can be named after the gym.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -295,7 +296,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Records the reference climb and your attempt.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recorded alongside video; audio is not analysed.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Names a session after the gym you filmed it at. Used for the name only; your clips never leave the device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Imports climbing clips you already filmed, and reads where a clip was filmed so a session can be named after the gym.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
