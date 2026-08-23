@@ -11,21 +11,23 @@ struct SessionListView: View {
 
     var body: some View {
         List {
-            SwiftUI.Section("New session") {
-                TextField("Name (route, grade, date…)", text: $newSessionName)
+            SwiftUI.Section {
+                TextField("Name (optional)", text: $newSessionName)
                 Button {
-                    let name = newSessionName.isEmpty
-                        ? "Session \(Date().formatted(date: .abbreviated, time: .shortened))"
-                        : newSessionName
+                    let typed = newSessionName
                     newSessionName = ""
                     // Creating pushes straight to the clips screen: a session
                     // with no clips has nothing else to offer.
-                    Task { await model.newSession(name: name) }
+                    Task { await model.newSession(name: typed) }
                 } label: {
                     Text("Create and add clips").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .listRowSeparator(.hidden)
+            } header: {
+                Text("New session")
+            } footer: {
+                Text("Leave the name empty and the session names itself — after the gym, if the clip knows where it was filmed, otherwise by date.")
             }
 
             if let session = model.session {
@@ -105,9 +107,22 @@ struct SessionSetupView: View {
     @Environment(AppModel.self) private var model
     @State private var referenceItem: PhotosPickerItem?
     @State private var attemptItem: PhotosPickerItem?
+    @State private var editedName = ""
 
     var body: some View {
         List {
+            SwiftUI.Section {
+                TextField("Session name", text: $editedName)
+                    .onSubmit { Task { await model.renameSession(to: editedName) } }
+                if editedName != (model.session?.name ?? "") {
+                    Button("Save name") { Task { await model.renameSession(to: editedName) } }
+                }
+            } header: {
+                Text("Session")
+            } footer: {
+                Text(nameProvenance)
+            }
+
             SwiftUI.Section {
                 if let reference = model.session?.reference {
                     ClipRow(video: reference)
@@ -166,6 +181,8 @@ struct SessionSetupView: View {
         }
         .navigationTitle("Clips")
         .safeAreaInset(edge: .bottom) { submitBar }
+        .task(id: model.session?.id) { editedName = model.session?.name ?? "" }
+        .onChange(of: model.session?.name) { _, name in editedName = name ?? "" }
         .onChange(of: referenceItem) { _, item in
             guard let item else { return }
             referenceItem = nil
@@ -181,6 +198,22 @@ struct SessionSetupView: View {
         .onChange(of: model.state) { _, state in
             guard state == .done, model.processed != nil else { return }
             if model.path.last != .results { model.path.append(.results) }
+        }
+    }
+
+    /// Where the name came from, stated plainly.
+    ///
+    /// The date case deliberately reads as an outcome rather than a failure.
+    /// Gyms are windowless warehouses where GPS and cell both fail, so a date
+    /// name is the *normal* result — dressing it as "location unavailable"
+    /// would put a warning on the majority case and teach the user to ignore
+    /// warnings.
+    private var nameProvenance: String {
+        switch model.sessionNameSource {
+        case .user: "Your name. Nothing renames it."
+        case .cache: "Named from a gym you've been to before. Rename it to change it here and next time."
+        case .network: "Named from Apple Maps. Rename it and the next session here inherits your name."
+        case .date: "Named by date. Rename it whenever you like."
         }
     }
 

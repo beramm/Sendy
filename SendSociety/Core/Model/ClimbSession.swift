@@ -16,19 +16,25 @@ public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
     public var role: Role
     public var recordedAt: Date
     public var label: String
+    /// Where the clip was filmed, when the file carried it. **Usually nil** —
+    /// `PHPicker` strips location and `AVCaptureMovieFileOutput` writes none.
+    /// Used for session naming and nothing else; see `plan.md` §3.12.
+    public var coordinate: Coordinate2D?
 
     public init(
         id: UUID = UUID(),
         filename: String,
         role: Role,
         recordedAt: Date = Date(),
-        label: String = ""
+        label: String = "",
+        coordinate: Coordinate2D? = nil
     ) {
         self.id = id
         self.filename = filename
         self.role = role
         self.recordedAt = recordedAt
         self.label = label
+        self.coordinate = coordinate
     }
 }
 
@@ -51,6 +57,12 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
     /// re-extracts, unlike every field in `TuningConfig`, which is why it lives
     /// here and not there.
     public var poseSource: PoseSource
+    /// Where the session was filmed, taken from the reference clip. Nil is the
+    /// common case indoors.
+    public var coordinate: Coordinate2D?
+    /// Why the session is called what it is. **`.user` is a lock**: a name a
+    /// human typed is never replaced by a geocode or a date.
+    public var nameSource: SessionNameSource
 
     public init(
         id: UUID = UUID(),
@@ -60,7 +72,9 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         attempts: [VideoRef] = [],
         config: TuningConfig = TuningConfig(),
         manualRouteOverride: Route? = nil,
-        poseSource: PoseSource = .vision
+        poseSource: PoseSource = .vision,
+        coordinate: Coordinate2D? = nil,
+        nameSource: SessionNameSource = .date
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -70,6 +84,8 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         self.config = config
         self.manualRouteOverride = manualRouteOverride
         self.poseSource = poseSource
+        self.coordinate = coordinate
+        self.nameSource = nameSource
     }
 
     /// Sessions written before pose sources existed decode as Vision rather
@@ -84,7 +100,16 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         config = try c.decode(TuningConfig.self, forKey: .config)
         manualRouteOverride = try c.decodeIfPresent(Route.self, forKey: .manualRouteOverride)
         poseSource = try c.decodeIfPresent(PoseSource.self, forKey: .poseSource) ?? .vision
+        coordinate = try c.decodeIfPresent(Coordinate2D.self, forKey: .coordinate)
+        // Sessions written before naming existed decode as `.user`, not
+        // `.date`. Their names were typed by hand or chosen by the old default,
+        // and either way re-resolving one would rename a session the user
+        // already knows by sight.
+        nameSource = try c.decodeIfPresent(SessionNameSource.self, forKey: .nameSource) ?? .user
     }
+
+    /// A name the user owns, and which nothing may overwrite.
+    public var hasUserName: Bool { nameSource == .user }
 
     public var isReadyToProcess: Bool { reference != nil && !attempts.isEmpty }
 

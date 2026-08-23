@@ -49,6 +49,13 @@ struct CaptureView: View {
                     if !camera.status.isEmpty {
                         Text(camera.status).font(.caption).foregroundStyle(.secondary)
                     }
+                    if let note = camera.locationNote {
+                        // Stated, not warned about. A clip with no location is
+                        // a session named by date, which is the ordinary
+                        // outcome in a windowless gym — flagging it would put a
+                        // warning on the majority case.
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
 
                 SwiftUI.Section {

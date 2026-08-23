@@ -3,6 +3,7 @@ import Foundation
 import AVFoundation
 import UIKit
 import Observation
+import CoreLocation
 
 /// The capture side of the harness: a dumb recorder with the settings the
 /// homography step depends on.
@@ -31,6 +32,22 @@ final class CameraController: NSObject {
     var configurationNotes: [String] = []
     var lastRecordingURL: URL?
     var exposureLocked = false
+    /// Whether the last recording carried a coordinate. Shown on the capture
+    /// screen as a plain statement of what the clip knows — **not** as a
+    /// warning. A clip with no location is a session named by date, which is
+    /// the ordinary indoor outcome.
+    var lastRecordingHadLocation = false
+    /// Nil before the first recording. After one, says whether the clip carries
+    /// a coordinate — which decides whether the session can be named after the
+    /// gym or falls back to its date.
+    var locationNote: String? {
+        guard lastRecordingURL != nil else { return nil }
+        return lastRecordingHadLocation
+            ? "Location saved with the clip — the session can be named after the gym."
+            : "No location on this clip; the session is named by date."
+    }
+
+    private let locationProvider = CaptureLocationProvider()
 
     enum CaptureError: Error, LocalizedError {
         case noCamera
@@ -178,11 +195,27 @@ final class CameraController: NSObject {
     /// cannot absorb — so recording starts after a countdown, not on touch.
     func startRecording(afterSeconds delay: Int) async throws -> URL {
         guard isRunning else { throw CaptureError.recordingFailed("camera not running") }
+
+        // `AVCaptureMovieFileOutput` writes no location of its own, so the
+        // recording path has to attach one — otherwise a clip filmed inside the
+        // app knows less about where it was shot than one imported from Photos.
+        //
+        // Started **before** the countdown and awaited after it, so the fix
+        // costs nothing: the user is walking to the wall for those seconds
+        // anyway. Taken after the countdown instead, a phone with no signal
+        // would sit for the whole location timeout between "1" and the camera
+        // actually rolling, which is exactly when the climber has started.
+        let location = Task { @MainActor [weak self] in await self?.attachLocationMetadata() }
+
         for remaining in stride(from: delay, through: 1, by: -1) {
             countdown = remaining
             try? await Task.sleep(for: .seconds(1))
         }
         countdown = nil
+
+        // Awaited rather than abandoned: `output.metadata` has to be set before
+        // `startRecording`, or it is not in the file.
+        await location.value
 
         let url = URL.temporaryDirectory.appendingPathComponent("capture-\(UUID().uuidString).mov")
         isRecording = true
@@ -195,6 +228,28 @@ final class CameraController: NSObject {
     func stopRecording() {
         guard isRecording else { return }
         output.stopRecording()
+    }
+
+    /// Writes the current coordinate into the movie as ISO 6709, the same field
+    /// the Camera app writes and the import path already knows how to read.
+    ///
+    /// Failure is silent by design. No fix, denied permission, or no signal all
+    /// end with a clip that has no location, and every one of those is a
+    /// session named by date rather than an error to report.
+    private func attachLocationMetadata() async {
+        guard let coordinate = await locationProvider.currentCoordinate() else {
+            output.metadata = []
+            lastRecordingHadLocation = false
+            return
+        }
+        let item = AVMutableMetadataItem()
+        item.keySpace = .quickTimeMetadata
+        item.key = AVMetadataKey.quickTimeMetadataKeyLocationISO6709 as any NSCopying & NSObjectProtocol
+        item.identifier = .quickTimeMetadataLocationISO6709
+        item.value = ISO6709.string(for: coordinate) as NSString
+        item.dataType = kCMMetadataDataType_QuickTimeMetadataLocation_ISO6709 as String
+        output.metadata = [item]
+        lastRecordingHadLocation = true
     }
 }
 

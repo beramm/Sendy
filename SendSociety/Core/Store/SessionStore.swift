@@ -236,6 +236,31 @@ public actor SessionStore {
         FileManager.default.fileExists(atPath: plateURL(session: session, video: video, config: config, extension: "png").path)
     }
 
+    // MARK: Placemark book (task 12.3)
+
+    /// **Not per session.** The whole point of the cache is that a gym is
+    /// resolved once and every later session there is offline, so it lives at
+    /// the store root alongside the saved configs.
+    var placemarksURL: URL { root.appendingPathComponent("placemarks.json") }
+
+    public func placemarks() -> PlacemarkBook {
+        guard let data = try? Data(contentsOf: placemarksURL) else { return PlacemarkBook() }
+        return (try? JSONDecoder().decode(PlacemarkBook.self, from: data)) ?? PlacemarkBook()
+    }
+
+    public func savePlacemarks(_ book: PlacemarkBook) throws {
+        try JSONEncoder().encode(book).write(to: placemarksURL, options: .atomic)
+    }
+
+    /// Records a name against a coordinate. Used by the geocode path and by
+    /// renaming — the second is what makes a corrected name stick for the next
+    /// visit, so `confirmedByUser` is the difference that matters.
+    public func rememberPlacemark(name: String, at coordinate: Coordinate2D, confirmedByUser: Bool) {
+        var book = placemarks()
+        book.remember(name: name, at: coordinate, confirmedByUser: confirmedByUser)
+        try? savePlacemarks(book)
+    }
+
     // MARK: Saved tuning configs
 
     var configsURL: URL { root.appendingPathComponent("configs.json") }
