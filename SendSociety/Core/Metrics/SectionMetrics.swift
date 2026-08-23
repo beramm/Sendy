@@ -29,6 +29,10 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     case torsoLean
     case kneeDrive
     case pullingArmTime
+    /// Armpit closed and the hand loaded: the lat is levering the body in.
+    case latLoadTime
+    /// Elbow bent and the hand loaded: the elbow flexors are holding it.
+    case elbowFlexTime
     case diagonalLoadBalance
 
     public var displayName: String {
@@ -53,6 +57,8 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .torsoLean: "Lean off the plumb line"
         case .kneeDrive: "Knee driven past the toe"
         case .pullingArmTime: "Time pulling on the arms"
+        case .latLoadTime: "Time pulling with the back"
+        case .elbowFlexTime: "Time on bent, loaded arms"
         case .diagonalLoadBalance: "Diagonal load imbalance"
         }
     }
@@ -65,7 +71,7 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .comPeakVelocity: "body-lengths/s"
         case .straightArmRatio, .loadAsymmetry, .armLoadShare, .armLoadPeak,
              .unweightedFootTime, .feetSetBeforeReach, .pullingArmTime,
-             .diagonalLoadBalance: "%"
+             .latLoadTime, .elbowFlexTime, .diagonalLoadBalance: "%"
         case .footCommitmentSeconds: "s"
         case .footPlacementCount: "count"
         case .hipTwist, .pelvisTilt, .pelvisTurn, .torsoLean: "°"
@@ -81,7 +87,7 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
              .footPlacementCount, .reachMargin, .sectionDwellRatio,
              .armLoadShare, .armLoadPeak, .unweightedFootTime,
              .footCommitmentSeconds, .pelvisTilt, .torsoLean, .pullingArmTime,
-             .diagonalLoadBalance: true
+             .latLoadTime, .elbowFlexTime, .diagonalLoadBalance: true
         // Setting your feet before you move is the thing you want *more* of.
         case .feetSetBeforeReach: false
         case .straightArmRatio: false
@@ -293,7 +299,7 @@ public struct SectionDelta: Sendable, Codable, Hashable {
         case .pelvisTilt, .torsoLean: scale = 15.0
         case .pelvisTurn: scale = 25.0
         case .kneeDrive: scale = 0.4
-        case .pullingArmTime: scale = 0.3
+        case .pullingArmTime, .latLoadTime, .elbowFlexTime: scale = 0.3
         case .diagonalLoadBalance: scale = 0.25
         }
         return d.magnitude / scale * d.confidence
