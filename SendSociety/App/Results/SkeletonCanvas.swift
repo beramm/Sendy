@@ -10,6 +10,18 @@ struct AnalyticalOverlays: Equatable {
     var centreOfMass = true
     var baseOfSupport = true
     var limbLoad = true
+    /// The coach's pelvis triangle — two hips and the pubic bone — plus the
+    /// hip line and its tilt. A coach reads the pelvis before anything else and
+    /// draws exactly this on a still with a finger; drawing it *on the climber*
+    /// is what makes the number legible, which was the single clearest piece of
+    /// feedback from the coaching review.
+    var pelvisTriangle = true
+    /// Vertical through the pelvis, against the line the body actually makes.
+    /// The gap between them is the lean, and the lean says which arm is
+    /// working.
+    var plumbLine = true
+    /// Knee against its own ankle. Past the toe is a drop knee or a flag.
+    var kneeLine = false
     var divergenceVectors = false
     var holds = true
     /// The wall the route was derived from, behind the skeletons. Off gives
@@ -23,6 +35,7 @@ struct AnalyticalOverlays: Equatable {
 
     static let none = AnalyticalOverlays(
         centreOfMass: false, baseOfSupport: false, limbLoad: false,
+        pelvisTriangle: false, plumbLine: false, kneeLine: false,
         divergenceVectors: false, holds: false, wallBackdrop: false
     )
 }
@@ -217,6 +230,8 @@ struct SkeletonCanvas: View {
             }
         }
 
+        drawPosture(frame: frame, metrics: metrics, scale: scale, colour: colour, in: &context, size: size)
+
         if overlays.centreOfMass, let com = metrics.com, let p = normalized(com, frame: frame, scale: scale) {
             let c = point(p, in: size)
             let r: CGFloat = 7
@@ -248,6 +263,117 @@ struct SkeletonCanvas: View {
                 context.fill(ellipse, with: .color(colour))
             } else {
                 context.stroke(ellipse, with: .color(.red), lineWidth: 3)
+            }
+        }
+    }
+
+    /// The three reads a coach draws on the body itself: pelvis, plumb line,
+    /// knee. Every figure here comes from `PostureFrame` — this function
+    /// measures nothing, it only draws what was already measured.
+    private func drawPosture(
+        frame: PoseFrame,
+        metrics: FrameMetrics,
+        scale: ClimbScale?,
+        colour: Color,
+        in context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        let posture = metrics.posture
+
+        if overlays.pelvisTriangle, let pelvis = posture.pelvis,
+           let left = normalized(pelvis.leftHip, frame: frame, scale: scale),
+           let right = normalized(pelvis.rightHip, frame: frame, scale: scale),
+           let pubis = normalized(pelvis.pubis, frame: frame, scale: scale) {
+            let a = point(left, in: size), b = point(right, in: size), c = point(pubis, in: size)
+            var triangle = Path()
+            triangle.move(to: a)
+            triangle.addLine(to: b)
+            triangle.addLine(to: c)
+            triangle.closeSubpath()
+            context.fill(triangle, with: .color(colour.opacity(0.18)))
+            context.stroke(triangle, with: .color(colour), lineWidth: 2)
+
+            // The hip line gets its own weight: it is the thing the tilt figure
+            // is about, and it disappears into the triangle without it.
+            var hipLine = Path()
+            hipLine.move(to: a)
+            hipLine.addLine(to: b)
+            context.stroke(hipLine, with: .color(.white), lineWidth: 3)
+            context.stroke(hipLine, with: .color(colour), lineWidth: 1.5)
+
+            // Which way the pelvis points, drawn as the apex direction. This is
+            // the coach's "where is the pubic bone facing".
+            let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            var apexLine = Path()
+            apexLine.move(to: mid)
+            apexLine.addLine(to: c)
+            context.stroke(apexLine, with: .color(colour.opacity(0.8)),
+                           style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+
+            var label = String(format: "%.0f° tilt", abs(pelvis.tiltDegrees))
+            // Only quote a turn the estimate can actually carry. Near square the
+            // number is arbitrary, and printing it makes a guess look measured.
+            if let turn = pelvis.turnDegrees, pelvis.turnConfidence >= 0.3 {
+                label += String(format: " · %.0f° turned", turn)
+            }
+            context.draw(
+                Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(colour),
+                at: CGPoint(x: max(a.x, b.x) + 4, y: mid.y - 10),
+                anchor: .leading
+            )
+        }
+
+        if overlays.plumbLine, let pelvis = posture.pelvis,
+           let centre = normalized(pelvis.center, frame: frame, scale: scale) {
+            let hip = point(centre, in: size)
+            // Screen vertical through the pelvis: the plumb line itself.
+            var plumb = Path()
+            plumb.move(to: CGPoint(x: hip.x, y: hip.y - size.height * 0.30))
+            plumb.addLine(to: CGPoint(x: hip.x, y: hip.y + size.height * 0.12))
+            context.stroke(plumb, with: .color(.white.opacity(0.75)),
+                           style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+
+            // The line the body actually makes, against it.
+            if let shoulder = frame.shoulderCenter,
+               let shoulderPoint = normalized(shoulder, frame: frame, scale: scale) {
+                var body = Path()
+                body.move(to: hip)
+                body.addLine(to: point(shoulderPoint, in: size))
+                context.stroke(body, with: .color(.yellow), lineWidth: 2)
+            }
+            if let lean = posture.torsoLeanDegrees, abs(lean) >= 1 {
+                context.draw(
+                    Text(String(format: "%.0f° %@", abs(lean), lean > 0 ? "right" : "left"))
+                        .font(.system(size: 9, weight: .medium)).foregroundStyle(.yellow),
+                    at: CGPoint(x: hip.x + 6, y: hip.y - size.height * 0.16),
+                    anchor: .leading
+                )
+            }
+        }
+
+        if overlays.kneeLine {
+            for (knee, ankle, offset) in [
+                (JointName.leftKnee, JointName.leftAnkle, posture.leftKneeOverAnkle),
+                (JointName.rightKnee, JointName.rightAnkle, posture.rightKneeOverAnkle)
+            ] {
+                guard let offset,
+                      let k = normalized(frame, knee, scale: scale),
+                      let a = normalized(frame, ankle, scale: scale) else { continue }
+                let kp = point(k, in: size), ap = point(a, in: size)
+                var vertical = Path()
+                vertical.move(to: ap)
+                vertical.addLine(to: CGPoint(x: ap.x, y: kp.y))
+                context.stroke(vertical, with: .color(.teal.opacity(0.8)),
+                               style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                var across = Path()
+                across.move(to: CGPoint(x: ap.x, y: kp.y))
+                across.addLine(to: kp)
+                context.stroke(across, with: .color(.teal), lineWidth: 2)
+                context.draw(
+                    Text(String(format: "%.2f", abs(offset)))
+                        .font(.system(size: 8)).foregroundStyle(.teal),
+                    at: CGPoint(x: kp.x, y: kp.y - 8)
+                )
             }
         }
     }

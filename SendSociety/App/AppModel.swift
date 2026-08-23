@@ -17,7 +17,6 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
     case sideBySide
     case skeletonOverlay
     case skeletonOnly
-    case skeleton3D
 
     var id: String { rawValue }
 
@@ -26,7 +25,6 @@ enum ComparisonMode: String, CaseIterable, Identifiable {
         case .sideBySide: "Side by side"
         case .skeletonOverlay: "Skeleton overlay"
         case .skeletonOnly: "Skeleton"
-        case .skeleton3D: "Skeleton 3D"
         }
     }
 }
@@ -76,6 +74,20 @@ final class AppModel {
     /// is visible rather than merely believed impossible.
     var pipelineRunCount = 0
     var lastError: String?
+    /// **Wall clock from tapping Process to the results being on screen**, in
+    /// seconds — not the sum of the stage timings.
+    ///
+    /// The stage report already says where the time went inside the pipeline,
+    /// but a stage table that adds up to 4s does not answer "why did that take
+    /// half a minute". This is the number a gym trip is actually spent on:
+    /// video decode, Vision, and everything between the tap and the output.
+    /// Nil until a run finishes; a cancelled or failed run leaves the previous
+    /// value alone rather than reporting a partial one.
+    var lastProcessingSeconds: Double?
+    /// True while `lastProcessingSeconds` describes a run that read pose from
+    /// cache. A cached reprocess and a cold first run differ by an order of
+    /// magnitude, and a bare number that silently means either is misleading.
+    var lastProcessingWasCached = false
     var analysisProviderName = "Template"
     /// Navigation stack for the main flow, so creating a session can land the
     /// user on the clips screen without them having to find a row.
@@ -290,6 +302,10 @@ final class AppModel {
         let config = self.config
         let attemptIndex = self.attemptIndex
         state = .running(stage: "Starting", stageIndex: 0, fraction: 0)
+        // Started here rather than inside the pipeline: the question is how
+        // long the user waits, which includes building the provider and
+        // whatever the pipeline does before its first stage report.
+        let submittedAt = Date()
         processingTask = Task { [weak self] in
             guard let self else { return }
             // No extractor override: the pipeline picks one from the session's
@@ -314,6 +330,9 @@ final class AppModel {
                 }
                 self.processed = result
                 self.pipelineRunCount += 1
+                self.lastProcessingSeconds = Date().timeIntervalSince(submittedAt)
+                self.lastProcessingWasCached = result.stages
+                    .first { $0.name == "Pose extraction" }?.detail.contains("cached") == true
                 self.state = .done
                 self.analysisProviderName = result.analyses.first?.source ?? "Template"
                 var updated = session
@@ -330,6 +349,19 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// Submit-to-output time, formatted, or nil before the first finished run.
+    ///
+    /// Says whether pose came from cache, because the two numbers are not
+    /// comparable: a cold run pays for Vision over the whole clip and a
+    /// reprocess does not.
+    var processingTimeSummary: String? {
+        guard let seconds = lastProcessingSeconds else { return nil }
+        let time = seconds < 10
+            ? String(format: "%.1fs", seconds)
+            : String(format: "%.0fs", seconds)
+        return "\(time) \(lastProcessingWasCached ? "(cached pose)" : "(full extraction)")"
     }
 
     func cancelProcessing() {

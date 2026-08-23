@@ -40,8 +40,6 @@ public struct ProcessedSession: Sendable {
     public var referencePose: PoseSequence
     public var attemptPose: PoseSequence
     /// Camera-relative data for visualization only. It never enters analysis.
-    public var referencePose3D: PoseSequence3D?
-    public var attemptPose3D: PoseSequence3D?
     public var referenceScale: ClimbScale
     public var attemptScale: ClimbScale
     public var referenceContacts: [Contact]
@@ -141,21 +139,15 @@ public actor ProcessingPipeline {
     /// Overrides the session's `poseSource` when set. Tests inject a spy here;
     /// the app leaves it nil and lets the session decide.
     let extractorOverride: (any PoseExtractor)?
-    let pose3DExtractorOverride: (any Pose3DExtractor)?
-    let combinedPoseExtractorOverride: (any CombinedPoseExtractor)?
     let analysisProvider: any AnalysisProvider
 
     public init(
         store: SessionStore,
         extractor: (any PoseExtractor)? = nil,
-        pose3DExtractor: (any Pose3DExtractor)? = nil,
-        combinedPoseExtractor: (any CombinedPoseExtractor)? = nil,
         analysisProvider: any AnalysisProvider = TemplateAnalysisProvider()
     ) {
         self.store = store
         self.extractorOverride = extractor
-        self.pose3DExtractorOverride = pose3DExtractor
-        self.combinedPoseExtractorOverride = combinedPoseExtractor
         self.analysisProvider = analysisProvider
     }
 
@@ -194,15 +186,11 @@ public actor ProcessingPipeline {
         let rawAttempt = attemptData.pose
         let sourceName = session.poseSource.displayName
         let cacheDetail = "\(sourceName) — Reference: \(referenceData.detail); Attempt: \(attemptData.detail)"
-        let hasReference3D = referenceData.pose3D?.frames.contains { !$0.joints.isEmpty } == true
-        let hasAttempt3D = attemptData.pose3D?.frames.contains { !$0.joints.isEmpty } == true
-        let poseStatus: StageStatus = rawReference.isEmpty || rawAttempt.isEmpty
-            ? .failed
-            : (hasReference3D && hasAttempt3D ? .ok : .degraded)
         report(
-            "Pose extraction", t, poseStatus, cacheDetail,
+            "Pose extraction", t,
+            rawReference.isEmpty || rawAttempt.isEmpty ? .failed : .ok,
+            cacheDetail,
             rawReference.warnings + rawAttempt.warnings
-                + (referenceData.pose3D?.warnings ?? []) + (attemptData.pose3D?.warnings ?? [])
                 + referenceData.warnings + attemptData.warnings
         )
 
@@ -496,8 +484,6 @@ public actor ProcessingPipeline {
             config: config,
             referencePose: referencePose,
             attemptPose: attemptPose,
-            referencePose3D: referenceData.pose3D,
-            attemptPose3D: attemptData.pose3D,
             referenceScale: referenceScale,
             attemptScale: attemptScale,
             referenceContacts: referenceContactResult.contacts,
@@ -525,24 +511,10 @@ public actor ProcessingPipeline {
 
     struct PoseDataResult: Sendable {
         var pose: PoseSequence
-        var pose3D: PoseSequence3D?
         var poseFromCache: Bool
-        var pose3DFromCache: Bool
-        var usedCombinedExtraction: Bool
         var warnings: [String]
 
-        var detail: String {
-            let poseState = poseFromCache ? "2D cached" : "2D extracted"
-            let pose3DState: String
-            if pose3DFromCache {
-                pose3DState = "3D cached"
-            } else if pose3D != nil {
-                pose3DState = usedCombinedExtraction ? "3D extracted (shared decode)" : "3D extracted"
-            } else {
-                pose3DState = "3D unavailable"
-            }
-            return "\(poseState), \(pose3DState)"
-        }
+        var detail: String { poseFromCache ? "cached" : "extracted" }
     }
 
     func checkCancelled() throws {
@@ -556,121 +528,16 @@ public actor ProcessingPipeline {
         progress: @Sendable @escaping (Double) -> Void
     ) async throws -> PoseDataResult {
         let source = session.poseSource
-        let cachedPose = await store.cachedPose(session: session, video: video, source: source)
-        var cachedPose3D = await store.cachedPose3D(session: session, video: video)
-        var warnings: [String] = []
-
-        if let pose = cachedPose, let pose3D = cachedPose3D,
-           !Self.timelinesMatch(pose, pose3D) {
-            cachedPose3D = nil
-            warnings.append("The cached 3D pose timeline did not match 2D and was regenerated.")
-        }
-
-        if let pose = cachedPose, let pose3D = cachedPose3D {
+        if let cached = await store.cachedPose(session: session, video: video, source: source) {
             progress(1)
-            return PoseDataResult(
-                pose: pose, pose3D: pose3D,
-                poseFromCache: true, pose3DFromCache: true,
-                usedCombinedExtraction: false, warnings: warnings
-            )
+            return PoseDataResult(pose: cached, poseFromCache: true, warnings: [])
         }
-
         let url = await store.videoURL(session: session, video: video)
-
-        if cachedPose == nil, cachedPose3D == nil,
-           let combinedExtractor = combinedExtractor(for: source) {
-            do {
-                let bundle = try await combinedExtractor.extract(url: url, config: config, progress: progress)
-                guard bundle.hasSynchronizedTimeline() else {
-                    throw PoseExtractionError.readerFailed("combined 2D/3D frame timelines diverged")
-                }
-                try? await store.cachePose(bundle.pose, session: session, video: video, source: source)
-                try? await store.cachePose3D(bundle.pose3D, session: session, video: video)
-                return PoseDataResult(
-                    pose: bundle.pose, pose3D: bundle.pose3D,
-                    poseFromCache: false, pose3DFromCache: false,
-                    usedCombinedExtraction: true, warnings: warnings
-                )
-            } catch {
-                // Combined processing is an optimization, not authority to
-                // invalidate an otherwise valid analytical 2D run.
-                warnings.append("Shared 2D/3D extraction failed (\(error.localizedDescription)); analytical 2D extraction continued and 3D was retried independently.")
-            }
-        }
-
-        let pose: PoseSequence
-        let poseFromCache: Bool
-        if let cachedPose {
-            pose = cachedPose
-            poseFromCache = true
-        } else {
-            let extractor = extractorOverride ?? PoseExtractorFactory.make(source)
-            pose = try await extractor.extract(url: url, config: config, progress: progress)
-            poseFromCache = false
-            try? await store.cachePose(pose, session: session, video: video, source: source)
-        }
-
-        var pose3D = cachedPose3D
-        var pose3DFromCache = cachedPose3D != nil
-        if pose3D == nil {
-            do {
-                let extractor = try pose3DExtractor()
-                var pose3DConfig = config
-                // The 2D cache owns the emitted timeline. If the working-rate
-                // setting changed after that cache was written, reproduce the
-                // cached rate rather than making a new, incompatible schedule.
-                pose3DConfig.workingFrameRate = pose.frameRate
-                let extractionProgress: @Sendable (Double) -> Void
-                if poseFromCache {
-                    extractionProgress = progress
-                } else {
-                    extractionProgress = { _ in }
-                }
-                let extracted = try await extractor.extract(url: url, config: pose3DConfig, progress: extractionProgress)
-                if Self.timelinesMatch(pose, extracted) {
-                    pose3D = extracted
-                    pose3DFromCache = false
-                    try? await store.cachePose3D(extracted, session: session, video: video)
-                } else {
-                    warnings.append("3D pose was discarded because its frame timeline did not match analytical 2D pose.")
-                }
-            } catch {
-                warnings.append("3D pose unavailable (\(error.localizedDescription)); analytical 2D results remain valid.")
-            }
-        }
+        let extractor = extractorOverride ?? PoseExtractorFactory.make(source)
+        let pose = try await extractor.extract(url: url, config: config, progress: progress)
+        try? await store.cachePose(pose, session: session, video: video, source: source)
         progress(1)
-        return PoseDataResult(
-            pose: pose, pose3D: pose3D,
-            poseFromCache: poseFromCache, pose3DFromCache: pose3DFromCache,
-            usedCombinedExtraction: false, warnings: warnings
-        )
-    }
-
-    nonisolated static func timelinesMatch(
-        _ pose: PoseSequence,
-        _ pose3D: PoseSequence3D,
-        tolerance: Double = 1e-6
-    ) -> Bool {
-        PoseExtractionBundle(pose: pose, pose3D: pose3D).hasSynchronizedTimeline(tolerance: tolerance)
-    }
-
-    func combinedExtractor(for source: PoseSource) -> (any CombinedPoseExtractor)? {
-        if let combinedPoseExtractorOverride { return combinedPoseExtractorOverride }
-        // An injected or future non-Vision analytical extractor cannot be
-        // silently replaced by Apple's 2D request just to combine decoding.
-        guard extractorOverride == nil, source == .vision else { return nil }
-        if #available(macOS 15.0, iOS 18.0, tvOS 18.0, *) {
-            return VisionCombinedPoseExtractor()
-        }
-        return nil
-    }
-
-    func pose3DExtractor() throws -> any Pose3DExtractor {
-        if let pose3DExtractorOverride { return pose3DExtractorOverride }
-        if #available(macOS 15.0, iOS 18.0, tvOS 18.0, *) {
-            return VisionPose3DExtractor()
-        }
-        throw PoseExtractionError.sourceUnavailable("3D pose requires iOS 18 or macOS 15.")
+        return PoseDataResult(pose: pose, poseFromCache: false, warnings: [])
     }
 
     /// Returns the pose sequence and whether it came from the cache.

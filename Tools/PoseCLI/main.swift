@@ -295,6 +295,63 @@ func commandJitter(_ args: [String]) throws {
 
 // MARK: - segment (task 7.3 — the whole chain, visible)
 
+/// Per-move posture dump: the coach-priority reads on one real climb.
+///
+/// Exists because these thresholds — lat engagement, pulling load, hip-width
+/// calibration — are guesses until real footage says otherwise, and the tuning
+/// panel cannot be read on a laptop while a fixture is under inspection.
+func commandPosture(_ args: [String]) throws {
+    guard let input = args.dropFirst().first else { throw CLIError("usage: posecli posture <poses.json>") }
+    let config = configFrom(args)
+    let raw = try loadSequence(input)
+    let smoothed = PoseSmoother().process(raw, config: config)
+    let scale = ClimbScale(sequence: smoothed)
+    let result = ContactDetector().detect(smoothed, scale: scale, config: config)
+    let route = RouteBuilder().build(contacts: result.contacts, scale: scale, config: config)
+    let match = RouteMatcher().match(contacts: result.contacts, to: route, scale: scale, config: config)
+    let segmentation = SectionSegmenter().segment(
+        route: route, reference: match, attempt: match,
+        referenceFrameCount: smoothed.count, attemptFrameCount: smoothed.count,
+        scale: scale, config: config
+    )
+    let metrics = MetricsEngine().measure(sequence: smoothed, contacts: result.contacts, scale: scale, config: config)
+
+    let hipWidth = PostureEstimator().referenceHipWidth(sequence: smoothed, scale: scale, config: config)
+    print(String(format: "torso %.4f · calibrated hip width %@ · %d frames",
+                 scale.torsoLength,
+                 hipWidth.map { String(format: "%.4f (%.2f torso)", $0, $0 / scale.torsoLength) } ?? "none",
+                 smoothed.count))
+
+    let pelvisFrames = metrics.frames.compactMap(\.posture.pelvis)
+    let turnConfidences = pelvisFrames.map(\.turnConfidence)
+    print(String(format: "pelvis tracked on %d of %d frames · turn confidence median %.2f p90 %.2f",
+                 pelvisFrames.count, metrics.frames.count,
+                 turnConfidences.median ?? 0, turnConfidences.percentile(0.9) ?? 0))
+    let openSides = pelvisFrames.compactMap(\.openSide)
+    print("barn-door configuration on \(openSides.count) frames (\(openSides.filter { $0 == .left }.count) opening left, \(openSides.filter { $0 == .right }.count) right)")
+    print("")
+
+    print("MOVE   tilt°  turn°  conf   lean°  knee BL  pulling%  diagonal%")
+    for section in segmentation.sections {
+        let m = MetricsEngine().sectionMetrics(
+            section: section, range: section.referenceRange, metrics: metrics,
+            sequence: smoothed, contacts: result.contacts, targetHold: section.toHold, config: config
+        )
+        func value(_ kind: MetricKind, _ format: String, scaleBy: Double = 1) -> String {
+            guard let v = m[kind].value else { return "    —" }
+            return String(format: format, v * scaleBy)
+        }
+        print("  \(pad(String(section.index + 1), 4))"
+              + value(.pelvisTilt, "%7.1f")
+              + value(.pelvisTurn, "%7.1f")
+              + String(format: "%6.2f", m[.pelvisTurn].confidence)
+              + value(.torsoLean, "%8.1f")
+              + value(.kneeDrive, "%9.2f")
+              + value(.pullingArmTime, "%10.0f", scaleBy: 100)
+              + value(.diagonalLoadBalance, "%11.0f", scaleBy: 100))
+    }
+}
+
 func commandSegment(_ args: [String]) throws {
     guard let input = args.dropFirst().first else { throw CLIError("usage: posecli segment <poses.json>") }
     let config = configFrom(args)
@@ -967,6 +1024,7 @@ guard let command = cliArgs.first else {
       sweep    <poses.json>
       route    <poses.json>
       segment  <poses.json> [--merge m] [--eps e] [--mergegap n]
+      posture  <poses.json>
       fall     <poses.json> [--accel a] [--sustain s] [--recontact s]
       frames   <video> <poses.json> --indices 10,50 [--out dir] [--holds]
       pipeline <reference.mov> <attempt.mov> [--plate-out wall.png]
@@ -985,6 +1043,7 @@ do {
     case "contacts": try commandContacts(cliArgs)
     case "sweep": try commandSweep(cliArgs)
     case "segment": try commandSegment(cliArgs)
+    case "posture": try commandPosture(cliArgs)
     case "fall": try commandFall(cliArgs)
     case "jitter": try commandJitter(cliArgs)
     case "route": try commandRoute(cliArgs)

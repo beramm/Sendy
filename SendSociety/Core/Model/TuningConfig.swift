@@ -185,6 +185,22 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// A delta smaller than this many normalized units is noise, not a finding.
     public var deltaSignificanceThreshold: Double = 0.08
 
+    // MARK: Posture — the coach-priority reads
+
+    /// Shoulder angle (hip–shoulder–elbow) below which the lat is levering,
+    /// i.e. the climber is pulling rather than hanging. The coach's number:
+    /// "if the angle there is less than 160, we know he's pulling a little bit."
+    public var latEngagementDegrees: Double = 160
+    /// A bent arm carrying less than this fraction of bodyweight is a
+    /// shake-out, not a pull, and does not count toward pulling time.
+    public var pullingArmLoadFraction: Double = 0.15
+    /// Where the pubic-bone apex of the pelvis triangle sits below the hip
+    /// centre, as a fraction of torso length. Drawing constant, not a
+    /// measurement — no metric is derived from it.
+    public var pubisDropTorsoFraction: Double = 0.20
+    /// Hip-line tilt below this is level enough not to be worth saying.
+    public var pelvisLevelDegrees: Double = 8
+
     // MARK: Fall detection
 
     /// Downward COM acceleration, in body-lengths/s², treated as free fall.
@@ -345,6 +361,10 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         loadedContactFraction = try c.decodeIfPresent(Double.self, forKey: .loadedContactFraction) ?? d.loadedContactFraction
         loadIDWExponent = try c.decodeIfPresent(Double.self, forKey: .loadIDWExponent) ?? d.loadIDWExponent
         deltaSignificanceThreshold = try c.decodeIfPresent(Double.self, forKey: .deltaSignificanceThreshold) ?? d.deltaSignificanceThreshold
+        latEngagementDegrees = try c.decodeIfPresent(Double.self, forKey: .latEngagementDegrees) ?? d.latEngagementDegrees
+        pullingArmLoadFraction = try c.decodeIfPresent(Double.self, forKey: .pullingArmLoadFraction) ?? d.pullingArmLoadFraction
+        pubisDropTorsoFraction = try c.decodeIfPresent(Double.self, forKey: .pubisDropTorsoFraction) ?? d.pubisDropTorsoFraction
+        pelvisLevelDegrees = try c.decodeIfPresent(Double.self, forKey: .pelvisLevelDegrees) ?? d.pelvisLevelDegrees
         fallAccelThreshold = try c.decodeIfPresent(Double.self, forKey: .fallAccelThreshold) ?? d.fallAccelThreshold
         fallSustainSeconds = try c.decodeIfPresent(Double.self, forKey: .fallSustainSeconds) ?? d.fallSustainSeconds
         fallRecontactWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .fallRecontactWindowSeconds) ?? d.fallRecontactWindowSeconds
@@ -401,6 +421,10 @@ public struct TuningConfig: Sendable, Codable, Hashable {
 
         .init(group: "Metrics", label: "Straight-arm degrees", help: "Elbow angle counted as straight", kind: .double(\.straightArmDegrees, range: 90 ... 180, step: 1)),
         .init(group: "Metrics", label: "Loaded contact fraction", help: "%BW below which a contact isn't bearing", kind: .double(\.loadedContactFraction, range: 0 ... 0.5, step: 0.01)),
+        .init(group: "Posture", label: "Lat engagement degrees", help: "Shoulder angle below which the arm is pulling", kind: .double(\.latEngagementDegrees, range: 90 ... 180, step: 1)),
+        .init(group: "Posture", label: "Pulling arm load", help: "%BW a bent arm must carry to count as pulling", kind: .double(\.pullingArmLoadFraction, range: 0 ... 0.6, step: 0.01)),
+        .init(group: "Posture", label: "Pubis drop", help: "Pelvis-triangle apex, as a fraction of torso (drawing only)", kind: .double(\.pubisDropTorsoFraction, range: 0.05 ... 0.5, step: 0.01)),
+        .init(group: "Posture", label: "Pelvis level degrees", help: "Hip tilt below this is level enough not to mention", kind: .double(\.pelvisLevelDegrees, range: 0 ... 30, step: 1)),
         .init(group: "Metrics", label: "Load IDW exponent", help: "Distance falloff for load sharing", kind: .double(\.loadIDWExponent, range: 0.5 ... 4, step: 0.1)),
         .init(group: "Metrics", label: "Delta significance", help: "Smaller deltas are noise, not findings", kind: .double(\.deltaSignificanceThreshold, range: 0 ... 1, step: 0.01)),
 

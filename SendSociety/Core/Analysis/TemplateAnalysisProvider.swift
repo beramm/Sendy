@@ -145,9 +145,12 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
     func ownNumbers(_ delta: SectionDelta) -> [AnalysisNote] {
         // Ordered by what a climber can act on, not by magnitude — these are
         // facts about one climb, so there is no "biggest difference" to rank by.
+        // Coach order — pelvis, then knee, then arm, then feet — because that
+        // is the order the reads actually depend on each other in. Where the
+        // hip is explains where the load went; the reverse is not true.
         let kinds: [MetricKind] = [
-            .hipDistanceMean, .armLoadShare, .straightArmRatio,
-            .loadAsymmetry, .footPlacementCount
+            .hipDistanceMean, .pelvisTilt, .pelvisTurn, .torsoLean, .kneeDrive,
+            .pullingArmTime, .armLoadShare, .loadAsymmetry, .footPlacementCount
         ]
         var notes: [AnalysisNote] = []
         var unavailable: [MetricKind] = []
@@ -219,6 +222,18 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
             return String(format: "You latched the hold from about %.2f body-lengths of extension.", value)
         case .sectionDwellRatio:
             return String(format: "You spent %.2f× as long here as the reference climber spent on their version.", value)
+        case .pelvisTilt:
+            return String(format: "Your hips sat about %.0f° off level through this move.", value)
+        case .pelvisTurn:
+            return String(format: "Your pelvis was turned about %.0f° out of square to the wall.", value)
+        case .torsoLean:
+            return String(format: "You hung about %.0f° off vertical here.", value)
+        case .kneeDrive:
+            return String(format: "Your knee came about %.2f body-lengths across your foot at its furthest.", value)
+        case .pullingArmTime:
+            return String(format: "You were actively pulling — bent arm, loaded, lat engaged — %.0f%% of this move.", value * 100)
+        case .diagonalLoadBalance:
+            return String(format: "Your weight sat %.0f%% onto one diagonal rather than shared across both.", value * 100)
         }
     }
 
@@ -242,6 +257,12 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         case .hipTwist: return "a different body position"
         case .reachMargin: return better ? "you moved in before reaching" : "you reached from too far out"
         case .sectionDwellRatio: return finding.attemptIsWorse ? "this one cost you time" : "quicker than them here"
+        case .pelvisTilt: return better ? "hips level" : "a hip dropped"
+        case .pelvisTurn: return better ? "you turned a hip in" : "you stayed square to the wall"
+        case .torsoLean: return better ? "you stayed under your hands" : "you hung off to one side"
+        case .kneeDrive: return better ? "knee in, hip to the wall" : "knees stacked over your feet"
+        case .pullingArmTime: return better ? "you barely pulled" : "you pulled through it"
+        case .diagonalLoadBalance: return better ? "both diagonals shared it" : "one diagonal took it"
         }
     }
 
