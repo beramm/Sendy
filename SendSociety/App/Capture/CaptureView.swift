@@ -77,17 +77,11 @@ struct CaptureView: View {
         .onChange(of: libraryItem) { _, item in
             guard let item else { return }
             libraryItem = nil
-            Task {
-                await model.importPicked(item, role: role)
-                dismiss()
-            }
+            model.beginImport(item, role: role)
+            dismiss()
         }
         .navigationDestination(item: $recordedURL) { url in
-            if singleTake {
-                SingleTakeSplitView(url: url)
-            } else {
-                CaptureReviewView(url: url, role: role)
-            }
+            SingleTakeSplitView(url: url)
         }
     }
 
@@ -245,7 +239,12 @@ struct CaptureView: View {
         Task {
             do {
                 let url = try await camera.startRecording(afterSeconds: countdownSeconds)
-                recordedURL = url
+                if singleTake {
+                    recordedURL = url
+                } else {
+                    model.beginAddingVideo(from: url, role: role)
+                    dismiss()
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -350,32 +349,6 @@ struct CameraPreview: UIViewRepresentable {
     }
 }
 
-struct CaptureReviewView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let url: URL
-    let role: VideoRef.Role
-
-    var body: some View {
-        Form {
-            SwiftUI.Section("Recorded") {
-                Text(url.lastPathComponent).font(.caption)
-                Button("Use as \(role == .reference ? "reference" : "attempt")") {
-                    Task {
-                        await model.addVideo(from: url, role: role)
-                        dismiss()
-                    }
-                }
-                Button("Discard", role: .destructive) {
-                    try? FileManager.default.removeItem(at: url)
-                    dismiss()
-                }
-            }
-        }
-        .navigationTitle("Review")
-    }
-}
-
 /// Task 0.0c, second option: one recording covering both climbers, split
 /// afterwards. Camera pose is identical by construction, which sidesteps the
 /// tripod-bump risk entirely.
@@ -458,6 +431,3 @@ struct SingleTakeSplitView: View {
 }
 
 #endif
-
-
-
