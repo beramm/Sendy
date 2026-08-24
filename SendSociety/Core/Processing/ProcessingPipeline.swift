@@ -70,7 +70,8 @@ public struct ProcessedSession: Sendable {
     /// Detailed move-level output retained for provider compatibility and
     /// instrumentation. The Results UI does not present this array.
     public var analyses: [SectionAnalysis]
-    /// One primary finding per comparison sequence for `ResultsView`.
+    /// One Results container per comparison sequence, including the paired
+    /// REF/YOU wording for one shared main difference and comparison detail.
     public var sequenceAnalyses: [SequenceAnalysis]
     public var fallReport: FallReport
     public var fallAnalysis: SectionAnalysis?

@@ -63,12 +63,12 @@ struct ResultsView: View {
                     playbackControls
                         .padding(.top, 18)
 
-                    insightCard(processed)
-                        .padding(.top, 24)
+                    insightCards(processed)
+                        .padding(.top, 18)
 
                     numbersButton(processed)
                         .padding(.top, 18)
-                        .padding(.bottom, 32)
+                        .padding(.bottom, 24)
                 }
                 .padding(.horizontal, 18)
                 .frame(minHeight: geometry.size.height, alignment: .top)
@@ -91,14 +91,14 @@ struct ResultsView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 10) {
             HStack {
                 Spacer()
                 Button(action: closeResults) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 28, weight: .light))
+                        .font(.system(size: 25, weight: .light))
                         .foregroundStyle(ResultsStyle.secondaryText)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 38)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -118,7 +118,7 @@ struct ResultsView: View {
                                         ? Color.black
                                         : ResultsStyle.secondaryText
                                 )
-                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .frame(maxWidth: .infinity, minHeight: 36)
                                 .background(
                                     displayMode == mode ? Color.white : Color.clear,
                                     in: .rect(cornerRadius: ResultsStyle.controlCornerRadius - 3)
@@ -140,16 +140,19 @@ struct ResultsView: View {
                     guard displayMode == .sideBySide else { return }
                     skeletonEnabled.toggle()
                 } label: {
-                    Image(systemName: "skew")
-                        .font(.system(size: 20, weight: .medium))
+                    Image("ResultsSkeleton")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 25, height: 24)
                         .foregroundStyle(
                             skeletonIsActive
                                 ? Color.black
                                 : ResultsStyle.secondaryText
                         )
-                        .frame(width: 58, height: 52)
+                        .frame(width: 58, height: 42)
                         .background(
-                            skeletonIsActive ? Color.white : ResultsStyle.controlSurface,
+                            skeletonIsActive ? AppTheme.accent : ResultsStyle.controlSurface,
                             in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
                         )
                 }
@@ -169,7 +172,7 @@ struct ResultsView: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 46, height: 52)
+                        .frame(width: 46, height: 42)
                         .background(
                             ResultsStyle.controlSurface,
                             in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
@@ -178,7 +181,7 @@ struct ResultsView: View {
                 .accessibilityLabel("Overlay options")
             }
         }
-        .padding(.top, 6)
+        .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -230,12 +233,13 @@ struct ResultsView: View {
                         frameIndex: frames.reference,
                         metrics: processed.referenceMetrics.frame(at: frames.reference),
                         scale: processed.referenceScale,
-                        colour: .green,
+                        colour: ResultsStyle.reference,
                         transform: nil,
                         overlays: overlays,
                         scrubbing: isScrubbing,
                         cache: frameCache,
-                        badgeLabel: "REF"
+                        badgeLabel: "REF",
+                        badgeColor: ResultsStyle.reference
                     )
                     SkeletonOverlayPane(
                         title: processed.attempt?.label.nonEmpty ?? "You",
@@ -244,12 +248,13 @@ struct ResultsView: View {
                         frameIndex: frames.attempt,
                         metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
                         scale: processed.attemptScale,
-                        colour: .orange,
+                        colour: ResultsStyle.attempt,
                         transform: processed.alignment.homography.inverted,
                         overlays: overlays,
                         scrubbing: isScrubbing,
                         cache: frameCache,
                         badgeLabel: "YOU",
+                        badgeColor: ResultsStyle.attempt,
                         unavailableReason: "Not reached"
                     )
                 } else {
@@ -261,6 +266,7 @@ struct ResultsView: View {
                         scrubbing: isScrubbing,
                         cache: frameCache,
                         badgeLabel: "REF",
+                        badgeColor: ResultsStyle.reference,
                         showsPreviewArtwork: showsPreviewArtwork
                     )
                     ComparisonVideoPane(
@@ -271,6 +277,7 @@ struct ResultsView: View {
                         scrubbing: isScrubbing,
                         cache: frameCache,
                         badgeLabel: "YOU",
+                        badgeColor: ResultsStyle.attempt,
                         showsPreviewArtwork: showsPreviewArtwork,
                         unavailableReason: "Not reached"
                     )
@@ -321,7 +328,13 @@ struct ResultsView: View {
                                     containsFall: containsFall,
                                     hasDifferentMoveCount: hasDifferentMoveCount
                                 ))
-                                .frame(width: 52, height: 48)
+                                .frame(
+                                    width: sequenceButtonWidth(
+                                        selected: selected,
+                                        hasDifferentMoveCount: hasDifferentMoveCount
+                                    ),
+                                    height: selected ? 48 : 40
+                                )
                                 .background(
                                     sequenceBackground(
                                         selected: selected,
@@ -330,7 +343,6 @@ struct ResultsView: View {
                                     ),
                                     in: .rect(cornerRadius: 15)
                                 )
-                                .scaleEffect(selected ? 1.12 : 1)
                                 .animation(.snappy(duration: 0.2), value: selected)
                             }
                             .buttonStyle(.plain)
@@ -344,11 +356,11 @@ struct ResultsView: View {
                     }
                     // Center short lists instead of pinning them to the leading
                     // edge. Longer lists retain their intrinsic width and scroll.
-                    .frame(minWidth: geometry.size.width, minHeight: 60, alignment: .center)
+                    .frame(minWidth: geometry.size.width, minHeight: 52, alignment: .center)
                 }
                 .scrollIndicators(.hidden)
             }
-            .frame(height: 60)
+            .frame(height: 52)
 
             Button { selectSequence(position.sectionIndex + 1, processed: processed) } label: {
                 Image(systemName: "chevron.right")
@@ -381,51 +393,90 @@ struct ResultsView: View {
         }
     }
 
-    private func insightCard(_ processed: ProcessedSession) -> some View {
+    private func insightCards(_ processed: ProcessedSession) -> some View {
         let insight = currentInsight(processed)
         let count = processed.sequences.sequences.count
 
-        return VStack(alignment: .leading, spacing: 18) {
-            HStack {
+        return VStack(spacing: 14) {
+            HStack(spacing: 7) {
                 Text("Sequence")
-                    .font(.system(size: 17, weight: .regular, design: .monospaced))
+                    .fontWeight(.regular)
                     .foregroundStyle(ResultsStyle.secondaryText)
 
                 Text("\(position.sectionIndex + 1) of \(count)")
-                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 13)
-                    .frame(minHeight: 34)
-                    .background(.white, in: .capsule)
-
-                Spacer()
-                Text(durationLabel(processed))
-                    .font(.system(size: 16, weight: .regular, design: .monospaced))
-                    .foregroundStyle(ResultsStyle.secondaryText)
-                    .multilineTextAlignment(.trailing)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
             }
+            .font(.system(size: 15, design: .monospaced))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Sequence \(position.sectionIndex + 1) of \(count)")
 
-            if let insight {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(sentence(insight.observation))
-                        .foregroundStyle(.white)
-                    if let cause = insight.cause, !cause.isEmpty {
-                        Text(sentence(cause, capitalizing: true))
-                            .foregroundStyle(AppTheme.accent)
-                            .fontWeight(.semibold)
-                    }
-                }
-                .font(.system(size: 23, weight: .regular))
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                differenceCard(
+                    label: "REF",
+                    color: ResultsStyle.reference,
+                    duration: referenceDurationLabel(processed),
+                    finding: insight?.referenceFinding
+                )
+                differenceCard(
+                    label: "YOU",
+                    color: ResultsStyle.attempt,
+                    duration: attemptDurationLabel(processed),
+                    finding: insight?.attemptFinding
+                )
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24)
+    }
+
+    private func differenceCard(
+        label: String,
+        color: Color,
+        duration: String,
+        finding: SequenceDifferenceFinding?
+    ) -> some View {
+        let resolved = finding ?? .unavailable("No sequence finding was produced.")
+        let sentence = resolved.sentence(
+            subject: label == "YOU" ? "You" : "The reference",
+            causeSubject: label == "YOU" ? "you" : "they"
+        )
+
+        return VStack(spacing: 9) {
+            HStack(alignment: .center) {
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 28)
+                    .background(Color.black.opacity(0.72), in: .capsule)
+
+                Spacer(minLength: 4)
+
+                Text(duration)
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(ResultsStyle.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+
+            Text(sentence)
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(resolved.isAvailable ? Color.white : ResultsStyle.secondaryText)
+            .multilineTextAlignment(.center)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 112)
         .background(
             ResultsStyle.panelSurface,
             in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label), \(duration), \(sentence)")
+        .accessibilityValue(resolved.unavailableReason ?? "")
     }
 
     private func numbersButton(_ processed: ProcessedSession) -> some View {
@@ -446,7 +497,7 @@ struct ResultsView: View {
                     : Color.secondary
             )
             .padding(.horizontal, 24)
-            .frame(maxWidth: .infinity, minHeight: 78)
+            .frame(maxWidth: .infinity, minHeight: 56)
             .background(
                 ResultsStyle.panelSurface,
                 in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
@@ -490,6 +541,15 @@ struct ResultsView: View {
         return ResultsStyle.panelSurface
     }
 
+    private func sequenceButtonWidth(
+        selected: Bool,
+        hasDifferentMoveCount: Bool
+    ) -> CGFloat {
+        if selected { return 72 }
+        if hasDifferentMoveCount { return 64 }
+        return 52
+    }
+
     private func sequenceForeground(
         selected: Bool,
         containsFall: Bool,
@@ -508,15 +568,6 @@ struct ResultsView: View {
         if containsFall { states.append("Fall detected in this sequence") }
         if hasDifferentMoveCount { states.append("Different number of moves") }
         return states.joined(separator: ", ")
-    }
-
-    private func sentence(_ value: String, capitalizing: Bool = false) -> String {
-        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
-        if capitalizing, let first = text.first {
-            text = first.uppercased() + String(text.dropFirst())
-        }
-        return text + "."
     }
 
     private func currentInsight(_ processed: ProcessedSession) -> SequenceAnalysis? {
@@ -568,9 +619,14 @@ struct ResultsView: View {
         return paneWidth / sourceAspect
     }
 
-    private func durationLabel(_ processed: ProcessedSession) -> String {
+    private func referenceDurationLabel(_ processed: ProcessedSession) -> String {
         guard let sequence = currentSequence(processed) else { return "—" }
         return clock(duration(of: sequence.referenceRange, in: processed.referencePose))
+    }
+
+    private func attemptDurationLabel(_ processed: ProcessedSession) -> String {
+        guard let sequence = currentSequence(processed), sequence.attemptReached else { return "—" }
+        return clock(duration(of: sequence.attemptRange, in: processed.attemptPose))
     }
 
     private func duration(of range: Range<Int>, in pose: PoseSequence) -> Double {

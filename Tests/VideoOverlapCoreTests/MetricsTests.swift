@@ -165,6 +165,84 @@ struct MetricsTests {
                 "COM path \(smallPath) vs \(largePath) body-lengths")
     }
 
+    @Test("Sequence metrics retain stable start and finish body position")
+    func endpointBodyPositionMetrics() throws {
+        let scale = ClimbScale(iso: .square, torsoLength: 0.1)
+        let frames = (0 ..< 20).map { index -> FrameMetrics in
+            let atStart = index < 2
+            let atEnd = index >= 18
+            let hipDepth = atStart ? 0.20 : (atEnd ? 0.80 : 0.45)
+            let tilt = atStart ? 3.0 : (atEnd ? 21.0 : 10.0)
+            let turn = atStart ? 38.0 : (atEnd ? 8.0 : 20.0)
+            let lean = atStart ? 4.0 : (atEnd ? 26.0 : 12.0)
+            let hipCenter = Point2D(x: 0.5, y: 0.45)
+            let pelvis = PelvisPose(
+                leftHip: Point2D(x: 0.47, y: 0.45),
+                rightHip: Point2D(x: 0.53, y: 0.45),
+                pubis: Point2D(x: 0.5, y: 0.42),
+                center: hipCenter,
+                tiltDegrees: tilt,
+                turnDegrees: turn,
+                turnConfidence: 1,
+                openSide: nil
+            )
+            return FrameMetrics(
+                index: index,
+                timeSeconds: Double(index) / 30,
+                com: Point2D(x: 0.20 + Double(index) * 0.02, y: 0.50),
+                comConfidence: 1,
+                comSpeed: 0.2,
+                load: .none,
+                baseOfSupport: .empty,
+                hipDepth: DepthEstimate(zBodyLengths: hipDepth, confidence: 1),
+                leftElbowDegrees: 165,
+                rightElbowDegrees: 165,
+                hipTwistDegrees: turn,
+                activeContacts: [],
+                posture: PostureFrame(pelvis: pelvis, torsoLeanDegrees: lean)
+            )
+        }
+        let climb = ClimbMetrics(
+            frames: frames,
+            scale: scale,
+            calibration: SegmentCalibration(lengths: [:], samples: [:], warnings: []),
+            warnings: []
+        )
+        let hold = Hold(
+            id: 1,
+            position: Point2D(x: 0.6, y: 0.8),
+            firstUsedBy: .leftWrist,
+            ordinal: 1,
+            contactCount: 1,
+            firstFrame: 0
+        )
+        let section = Section(
+            index: 0,
+            fromHold: hold,
+            toHold: hold,
+            referenceRange: 0 ..< frames.count,
+            attemptRange: 0 ..< frames.count
+        )
+        let result = MetricsEngine().sectionMetrics(
+            section: section,
+            range: 0 ..< frames.count,
+            metrics: climb,
+            sequence: SyntheticClimb.climb(moves: 1),
+            contacts: [],
+            targetHold: hold,
+            config: TuningConfig()
+        )
+
+        #expect(abs(try #require(result[.hipDistanceStart].value) - 0.20) < 1e-9)
+        #expect(abs(try #require(result[.hipDistanceEnd].value) - 0.80) < 1e-9)
+        #expect(abs(try #require(result[.pelvisTurnStart].value) - 38) < 1e-9)
+        #expect(abs(try #require(result[.pelvisTurnEnd].value) - 8) < 1e-9)
+        #expect(abs(try #require(result[.torsoLeanStart].value) - 4) < 1e-9)
+        #expect(abs(try #require(result[.torsoLeanEnd].value) - 26) < 1e-9)
+        #expect(try #require(result[.comDisplacement].value) > 3)
+        #expect(try #require(result[.comPathEfficiency].value) > 0.9)
+    }
+
     @Test("Segment calibration takes the upper tail of observed length")
     func segmentCalibration() {
         let sequence = SyntheticClimb.climb(moves: 3)
