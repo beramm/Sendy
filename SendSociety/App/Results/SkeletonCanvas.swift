@@ -68,6 +68,10 @@ struct SkeletonCanvas: View {
     /// transform. Nil falls back to the plain diagram; it is a backdrop and no
     /// number on this canvas is derived from it.
     var wallPlate: CGImage?
+    /// Stable identity colors used everywhere in Results: REF is green and
+    /// YOU is blue.
+    var referenceColour: Color = ResultsStyle.reference
+    var attemptColour: Color = ResultsStyle.attempt
     /// Overrides the colour of the climber in the `reference` slot.
     ///
     /// Skeleton-overlay mode draws one climber per pane and passes whichever
@@ -129,13 +133,13 @@ struct SkeletonCanvas: View {
             if let referenceFrame, referenceFrame.hipCenter != nil, referenceFrame.shoulderCenter != nil {
                 draw(
                     frame: referenceFrame, metrics: referenceMetrics, scale: referenceScale,
-                    colour: soloColour ?? .green, in: &context, size: size, label: "reference"
+                    colour: soloColour ?? referenceColour, in: &context, size: size, label: "reference"
                 )
             }
             if let attemptFrame, attemptFrame.hipCenter != nil, attemptFrame.shoulderCenter != nil {
                 draw(
                     frame: attemptFrame, metrics: attemptMetrics, scale: attemptScale,
-                    colour: .orange, in: &context, size: size, label: "attempt"
+                    colour: attemptColour, in: &context, size: size, label: "attempt"
                 )
             }
 
@@ -469,7 +473,7 @@ struct SkeletonOverlayPane: View {
     let frameIndex: Int?
     let metrics: FrameMetrics?
     let scale: ClimbScale?
-    /// Green for the reference, orange for the attempt — the same pairing as
+    /// Green for the reference, blue for the attempt — the same pairing as
     /// skeleton-only mode, so a colour means one climber across every view.
     let colour: Color
     /// `nil` for the reference, whose image space *is* wall space.
@@ -482,6 +486,7 @@ struct SkeletonOverlayPane: View {
     /// The Results screen places compact REF/YOU badges inside the footage. Nil
     /// preserves the current diagnostic screen's caption-above presentation.
     var badgeLabel: String? = nil
+    var badgeColor: Color = .white
     var unavailableReason: String = "not reached"
 
     @State private var frames = VideoFrameLoader()
@@ -560,12 +565,11 @@ struct SkeletonOverlayPane: View {
 
                     if let badgeLabel {
                         Text(badgeLabel)
-                            .font(.system(size: 13, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.black)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(badgeColor)
                             .padding(.horizontal, 12)
                             .frame(minHeight: 34)
-                            .background(.white, in: .capsule)
-                            .overlay { Capsule().stroke(.black.opacity(0.25), lineWidth: 0.5) }
+                            .background(ResultsStyle.badgeSurface, in: .capsule)
                             .padding(10)
                     }
                 }

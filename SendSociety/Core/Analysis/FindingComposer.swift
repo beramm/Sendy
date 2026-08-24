@@ -10,8 +10,10 @@ public struct Finding: Sendable, Hashable {
     public var because: String?
     /// Something to try next go. Never a number to hit.
     public var drill: String?
-    /// The metrics behind it, in ranked order. Drives the evidence lines and
-    /// the direction guard.
+    /// The metrics behind it. For a causal finding, index 0 is the observed
+    /// outcome and index 1 is its licensed cause. Standalone findings contain
+    /// only their observation metric. This order is a semantic contract, not
+    /// just evidence ranking.
     public var metrics: [MetricDelta]
     /// True when the attempt did this *better* than the reference climber.
     /// Kept explicit so nothing downstream has to infer polarity — inferring it
@@ -26,7 +28,11 @@ public struct Finding: Sendable, Hashable {
         self.attemptIsWorse = attemptIsWorse
     }
 
-    public var primaryMetric: MetricKind? { metrics.first?.kind }
+    public var observationMetric: MetricDelta? { metrics.first }
+    public var causeMetric: MetricDelta? {
+        because == nil ? nil : metrics.dropFirst().first
+    }
+    public var primaryMetric: MetricKind? { observationMetric?.kind }
 
     /// What a reader sees: claim plus cause, as one sentence.
     public var text: String {
@@ -118,7 +124,7 @@ public struct FindingComposer: Sendable {
                 claim: "You went for the hold first and sorted your feet out afterwards.",
                 because: "That leaves you hanging off your arms while you fix your feet, which is where the extra effort went.",
                 drill: "Set both feet where you want them, then move your hand. Feet first, hand second.",
-                metrics: [feet, arms],
+                metrics: [arms, feet],
                 attemptIsWorse: true
             ))
         }
@@ -129,7 +135,7 @@ public struct FindingComposer: Sendable {
                 claim: "You were slow to trust your feet on this move.",
                 because: "Each foot sat on its hold a while before you put any weight through it, and that hesitation is most of the extra time you spent here.",
                 drill: "Once the foot is on, press into it straight away — commit to it rather than testing it.",
-                metrics: [commitment, dwell],
+                metrics: [dwell, commitment],
                 attemptIsWorse: true
             ))
         }
@@ -151,7 +157,7 @@ public struct FindingComposer: Sendable {
                 claim: "You were reaching for the next hold from further away than they were.",
                 because: "That leaves you pulling in with your arms at full stretch instead of moving your body in first.",
                 drill: "Move your hips towards the hold before your hand goes for it.",
-                metrics: [reach, arms],
+                metrics: [arms, reach],
                 attemptIsWorse: true
             ))
         }
@@ -208,7 +214,7 @@ public struct FindingComposer: Sendable {
                 claim: "You hung off to one side rather than under your hands.",
                 because: "Your body sat further off vertical than theirs, so one arm and the opposite leg carried most of the move.",
                 drill: "Get your hips under the hand you are pulling on before you move — the weight should feel even across both arms.",
-                metrics: [lean, asymmetry],
+                metrics: [asymmetry, lean],
                 attemptIsWorse: true
             ))
         }
@@ -220,7 +226,7 @@ public struct FindingComposer: Sendable {
                 claim: "One hip dropped through this move.",
                 because: "With the pelvis tilted, the low side stops pressing into its foot and the weight goes back onto your hands.",
                 drill: "Keep the hips level as you move up — press the low foot down until both hips sit on one line.",
-                metrics: [tilt, arms],
+                metrics: [arms, tilt],
                 attemptIsWorse: true
             ))
         }
@@ -291,6 +297,20 @@ public struct FindingComposer: Sendable {
                 drill: worse ? "Turn a hip in and let it come to the wall before you reach." : nil,
                 metrics: [d], attemptIsWorse: worse
             )
+        case .hipDistanceStart:
+            return Finding(
+                claim: worse
+                    ? "You started this move with your hips further from the wall than they did."
+                    : "You started this move with your hips closer to the wall than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .hipDistanceEnd:
+            return Finding(
+                claim: worse
+                    ? "You finished this move with your hips further from the wall than they did."
+                    : "You finished this move with your hips closer to the wall than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
         case .straightArmRatio:
             return Finding(
                 claim: worse
@@ -305,6 +325,21 @@ public struct FindingComposer: Sendable {
                     ? "You moved around\(much) more than the move needed."
                     : "You took a more direct line through this move than they did.",
                 drill: worse ? "Try to travel the shortest line between the two positions." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .comDisplacement:
+            let farther = (d.delta ?? 0) > 0
+            return Finding(
+                claim: farther
+                    ? "Your centre of mass travelled further from start to finish than theirs."
+                    : "Your centre of mass travelled less from start to finish than theirs.",
+                metrics: [d], attemptIsWorse: false
+            )
+        case .comPathEfficiency:
+            return Finding(
+                claim: worse
+                    ? "Your centre of mass took a less direct line from start to finish."
+                    : "Your centre of mass took a more direct line from start to finish.",
                 metrics: [d], attemptIsWorse: worse
             )
         case .comPeakVelocity:
@@ -354,6 +389,20 @@ public struct FindingComposer: Sendable {
                 drill: worse ? "Press down through the low foot until both hips sit on the same line." : nil,
                 metrics: [d], attemptIsWorse: worse
             )
+        case .pelvisTiltStart:
+            return Finding(
+                claim: worse
+                    ? "You started with your hips less level than they did."
+                    : "You started with your hips more level than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .pelvisTiltEnd:
+            return Finding(
+                claim: worse
+                    ? "You finished with your hips less level than they did."
+                    : "You finished with your hips more level than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
         case .pelvisTurn:
             return Finding(
                 claim: worse
@@ -362,12 +411,40 @@ public struct FindingComposer: Sendable {
                 drill: worse ? "Try the move again with the hip on your reaching side turned in to the wall." : nil,
                 metrics: [d], attemptIsWorse: worse
             )
+        case .pelvisTurnStart:
+            return Finding(
+                claim: worse
+                    ? "You started squarer to the wall than they did."
+                    : "You started with a hip turned further into the wall than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .pelvisTurnEnd:
+            return Finding(
+                claim: worse
+                    ? "You finished squarer to the wall than they did."
+                    : "You finished with a hip turned further into the wall than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
         case .torsoLean:
             return Finding(
                 claim: worse
                     ? "You hung\(much) further off vertical than they did."
                     : "You stayed more directly under your hands than they did.",
                 drill: worse ? "Move your hips under the hand you are pulling on before you commit to the reach." : nil,
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .torsoLeanStart:
+            return Finding(
+                claim: worse
+                    ? "You started further off vertical than they did."
+                    : "You started more centered than they did.",
+                metrics: [d], attemptIsWorse: worse
+            )
+        case .torsoLeanEnd:
+            return Finding(
+                claim: worse
+                    ? "You finished further off vertical than they did."
+                    : "You finished more centered than they did.",
                 metrics: [d], attemptIsWorse: worse
             )
         case .kneeDrive:

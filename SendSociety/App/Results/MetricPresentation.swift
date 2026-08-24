@@ -14,10 +14,12 @@ struct MetricPresentation {
         switch kind {
         case .straightArmRatio, .loadAsymmetry, .armLoadShare, .armLoadPeak,
              .unweightedFootTime, .feetSetBeforeReach, .pullingArmTime,
-             .diagonalLoadBalance:
+             .latLoadTime, .elbowFlexTime, .diagonalLoadBalance,
+             .comPathEfficiency:
             lowerBound = 0
             upperBound = 1
-        case .hipDistanceMean, .hipDistancePeak, .reachMargin:
+        case .hipDistanceMean, .hipDistancePeak, .hipDistanceStart, .hipDistanceEnd,
+             .reachMargin:
             lowerBound = 0
             upperBound = 2
         case .kneeDrive:
@@ -25,7 +27,7 @@ struct MetricPresentation {
             // positive is driven past it. Keep zero centered in the bar.
             lowerBound = min(-1, (values.min() ?? 0) * 1.15)
             upperBound = max(1, (values.max() ?? 0) * 1.15)
-        case .comPathLength:
+        case .comPathLength, .comDisplacement:
             lowerBound = 0
             upperBound = 3
         case .comPeakVelocity:
@@ -37,7 +39,9 @@ struct MetricPresentation {
         case .footPlacementCount:
             lowerBound = 0
             upperBound = max(6, ceil(values.max() ?? 0))
-        case .hipTwist, .pelvisTilt, .pelvisTurn, .torsoLean:
+        case .hipTwist, .pelvisTilt, .pelvisTiltStart, .pelvisTiltEnd,
+             .pelvisTurn, .pelvisTurnStart, .pelvisTurnEnd,
+             .torsoLean, .torsoLeanStart, .torsoLeanEnd:
             lowerBound = 0
             upperBound = 90
         case .sectionDwellRatio:

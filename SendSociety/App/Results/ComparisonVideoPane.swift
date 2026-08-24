@@ -6,10 +6,14 @@ import SwiftUI
 enum ResultsStyle {
     static let controlSurface = Color(red: 0.20, green: 0.20, blue: 0.21)
     static let panelSurface = Color(red: 0.105, green: 0.105, blue: 0.115)
+    static let badgeSurface = Color.black.opacity(0.68)
+    static let reference = AppTheme.accent
+    static let attempt = Color(red: 0.0, green: 0.72, blue: 0.96)
     static let secondaryText = Color.white.opacity(0.58)
+    static let sheetSurface = Color(red: 0.18, green: 0.18, blue: 0.19)
     static let controlCornerRadius: CGFloat = 18
     static let paneCornerRadius: CGFloat = 16
-    static let panelCornerRadius: CGFloat = 30
+    static let panelCornerRadius: CGFloat = 16
 }
 
 /// A video frame surface used by the results side-by-side mode. Its parent
@@ -25,6 +29,7 @@ struct ComparisonVideoPane: View {
     let scrubbing: Bool
     let cache: FrameImageCache
     var badgeLabel: String? = nil
+    var badgeColor: Color = .white
     /// Lets Xcode previews show the complete result layout without importing a
     /// user video or touching the on-disk session store.
     var showsPreviewArtwork = false
@@ -74,12 +79,11 @@ struct ComparisonVideoPane: View {
             }
 
             Text(badgeLabel ?? title.uppercased())
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(.black)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(badgeColor)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 34)
-                .background(.white, in: .capsule)
-                .overlay { Capsule().stroke(.black.opacity(0.25), lineWidth: 0.5) }
+                .background(ResultsStyle.badgeSurface, in: .capsule)
                 .padding(10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

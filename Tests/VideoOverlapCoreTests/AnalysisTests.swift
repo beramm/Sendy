@@ -223,6 +223,56 @@ struct FindingComposerTests {
         #expect(findings.count == 1)
     }
 
+    @Test("Every causal rule orders the observed outcome before its cause")
+    func causalMetricRoles() throws {
+        let cases: [(outcome: MetricKind, cause: MetricKind, metrics: [(MetricKind, reference: Double, attempt: Double)])] = [
+            (.armLoadShare, .hipDistanceMean, [
+                (.armLoadShare, 0.25, 0.80), (.hipDistanceMean, 0.18, 0.70)
+            ]),
+            (.armLoadShare, .unweightedFootTime, [
+                (.armLoadShare, 0.25, 0.80), (.unweightedFootTime, 0.05, 0.70)
+            ]),
+            (.armLoadShare, .feetSetBeforeReach, [
+                (.armLoadShare, 0.25, 0.80), (.feetSetBeforeReach, 0.90, 0.20)
+            ]),
+            (.sectionDwellRatio, .footCommitmentSeconds, [
+                (.sectionDwellRatio, 1.0, 1.70), (.footCommitmentSeconds, 0.10, 1.10)
+            ]),
+            (.comPathLength, .footPlacementCount, [
+                (.comPathLength, 0.8, 1.8), (.footPlacementCount, 1, 5)
+            ]),
+            (.armLoadShare, .reachMargin, [
+                (.armLoadShare, 0.25, 0.80), (.reachMargin, 0.20, 0.80)
+            ]),
+            (.pullingArmTime, .pelvisTurn, [
+                (.pullingArmTime, 0.10, 0.75), (.pelvisTurn, 32, 5)
+            ]),
+            (.loadAsymmetry, .torsoLean, [
+                (.loadAsymmetry, 0.10, 0.70), (.torsoLean, 2, 25)
+            ]),
+            (.armLoadShare, .pelvisTilt, [
+                (.armLoadShare, 0.25, 0.80), (.pelvisTilt, 2, 24)
+            ])
+        ]
+
+        for item in cases {
+            let finding = try #require(FindingComposer().compose(Self.delta(item.metrics)).first)
+            #expect(finding.because != nil)
+            #expect(finding.observationMetric?.kind == item.outcome)
+            #expect(finding.causeMetric?.kind == item.cause)
+        }
+    }
+
+    @Test("Legacy straight-arm coaching does not claim the skeleton does the work")
+    func straightArmTradeoffAvoidsMisleadingCause() {
+        let findings = FindingComposer().compose(Self.delta([
+            (.armLoadShare, 0.25, 0.80),
+            (.straightArmRatio, 0.85, 0.20)
+        ]))
+
+        #expect(findings.allSatisfy { !$0.text.lowercased().contains("skeleton") })
+    }
+
     @Test("Feet on but unweighted is its own finding")
     func unweightedFeet() {
         let d = Self.delta([

@@ -1,59 +1,68 @@
 import SwiftUI
 
 struct ResultNumbersSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
     let insight: SequenceAnalysis
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if insight.metrics.isEmpty {
-                    ContentUnavailableView(
-                        "Numbers unavailable",
-                        systemImage: "chart.bar.xaxis",
-                        description: Text(insight.numbersUnavailableReason ?? "No measurements are available for this sequence.")
-                    )
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 18) {
-                            if !insight.comparisonIsValid {
-                                Label {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text("Reference comparison unavailable")
-                                            .fontWeight(.semibold)
-                                        Text(comparisonUnavailableExplanation)
-                                    }
-                                } icon: {
-                                    Image(systemName: "exclamationmark.triangle")
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-
-                            ForEach(insight.metrics, id: \.kind) { metric in
-                                MetricComparisonRow(
-                                    metric: metric,
-                                    comparisonIsValid: insight.comparisonIsValid
-                                )
-                            }
-                        }
-                        .padding(20)
-                    }
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Text("Detailed")
+                    .foregroundStyle(.white)
+                Text("Analytics")
+                    .foregroundStyle(AppTheme.accent)
             }
-            .navigationTitle("THE NUMBERS")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", systemImage: "xmark") { dismiss() }
-                        .labelStyle(.iconOnly)
+            .font(.system(size: 22, weight: .semibold))
+            .padding(.top, 34)
+            .padding(.bottom, 24)
+
+            if insight.metrics.isEmpty {
+                ContentUnavailableView(
+                    "Numbers unavailable",
+                    systemImage: "chart.bar.xaxis",
+                    description: Text(
+                        insight.numbersUnavailableReason
+                            ?? "No measurements are available for this sequence."
+                    )
+                )
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        if !insight.comparisonIsValid {
+                            Label {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Reference comparison unavailable")
+                                        .fontWeight(.semibold)
+                                    Text(comparisonUnavailableExplanation)
+                                }
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 4)
+                        }
+
+                        ForEach(insight.metrics, id: \.kind) { metric in
+                            MetricComparisonRow(
+                                metric: metric,
+                                comparisonIsValid: insight.comparisonIsValid
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 32)
                 }
+                .scrollIndicators(.hidden)
             }
         }
-        .presentationDetents([.medium, .large])
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(ResultsStyle.sheetSurface)
+        .presentationDetents([.fraction(0.61), .large])
         .presentationDragIndicator(.visible)
+        .presentationCornerRadius(30)
+        .presentationBackground(ResultsStyle.sheetSurface)
     }
 
     private var comparisonUnavailableExplanation: String {
@@ -74,24 +83,25 @@ private struct MetricComparisonRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Capsule()
-                .fill(.white.opacity(0.8))
+                .fill(.white.opacity(0.82))
                 .frame(width: 3)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(metric.kind.displayName)
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 8)
                     Text(metric.kind.unit)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(ResultsStyle.secondaryText)
                 }
 
                 valueBar(
                     label: "YOU",
                     value: metric.attempt,
                     fraction: presentation.fraction(for: metric.attempt),
-                    color: AppTheme.accent
+                    color: ResultsStyle.attempt
                 )
 
                 if comparisonIsValid {
@@ -99,14 +109,14 @@ private struct MetricComparisonRow: View {
                         label: "REFERENCE",
                         value: metric.reference,
                         fraction: presentation.fraction(for: metric.reference),
-                        color: .cyan
+                        color: ResultsStyle.reference
                     )
                 } else {
-                    HStack {
+                    HStack(spacing: 8) {
                         Text("REFERENCE")
                             .font(.caption2.weight(.bold))
-                            .foregroundStyle(.cyan)
-                            .frame(width: 84, alignment: .leading)
+                            .foregroundStyle(ResultsStyle.reference)
+                            .frame(width: 90, alignment: .leading)
                         Text("Not comparable")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -122,7 +132,7 @@ private struct MetricComparisonRow: View {
             Text(label)
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(color)
-                .frame(width: 84, alignment: .leading)
+                .frame(width: 90, alignment: .leading)
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -136,8 +146,8 @@ private struct MetricComparisonRow: View {
 
             Text(presentation.format(value))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 54, alignment: .trailing)
+                .foregroundStyle(ResultsStyle.secondaryText)
+                .frame(width: 48, alignment: .trailing)
         }
     }
 }

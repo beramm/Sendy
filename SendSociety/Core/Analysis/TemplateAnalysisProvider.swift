@@ -149,8 +149,16 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         // is the order the reads actually depend on each other in. Where the
         // hip is explains where the load went; the reverse is not true.
         let kinds: [MetricKind] = [
-            .hipDistanceMean, .pelvisTilt, .pelvisTurn, .torsoLean, .kneeDrive,
+            .hipDistanceMean, .hipDistanceStart, .hipDistanceEnd,
+            .pelvisTilt,
+            .pelvisTiltStart, .pelvisTiltEnd,
+            .pelvisTurn,
+            .pelvisTurnStart, .pelvisTurnEnd,
+            .torsoLean,
+            .torsoLeanStart, .torsoLeanEnd,
+            .comDisplacement, .comPathEfficiency,
             .pullingArmTime, .latLoadTime, .elbowFlexTime, .armLoadShare,
+            .kneeDrive,
             .loadAsymmetry, .footPlacementCount
         ]
         var notes: [AnalysisNote] = []
@@ -199,6 +207,10 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         switch kind {
         case .hipDistanceMean, .hipDistancePeak:
             return String(format: "Your hips sat about %.2f body-lengths off the wall through this move.", value)
+        case .hipDistanceStart:
+            return String(format: "Your hips started about %.2f body-lengths off the wall.", value)
+        case .hipDistanceEnd:
+            return String(format: "Your hips finished about %.2f body-lengths off the wall.", value)
         case .armLoadShare, .armLoadPeak:
             return String(format: "About %.0f%% of your weight went through your arms here.", value * 100)
         case .straightArmRatio:
@@ -215,6 +227,10 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
             return String(format: "Your feet were set before the reach %.0f%% of the time.", value * 100)
         case .comPathLength:
             return String(format: "Your centre of mass travelled %.2f body-lengths across this move.", value)
+        case .comDisplacement:
+            return String(format: "Your centre of mass travelled %.2f body-lengths from start to finish.", value)
+        case .comPathEfficiency:
+            return String(format: "Your centre-of-mass path was %.0f%% direct from start to finish.", value * 100)
         case .comPeakVelocity:
             return String(format: "Your fastest body movement here was %.2f body-lengths/s.", value)
         case .hipTwist:
@@ -225,10 +241,22 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
             return String(format: "You spent %.2f× as long here as the reference climber spent on their version.", value)
         case .pelvisTilt:
             return String(format: "Your hips sat about %.0f° off level through this move.", value)
+        case .pelvisTiltStart:
+            return String(format: "Your hips started about %.0f° off level.", value)
+        case .pelvisTiltEnd:
+            return String(format: "Your hips finished about %.0f° off level.", value)
         case .pelvisTurn:
             return String(format: "Your pelvis was turned about %.0f° out of square to the wall.", value)
+        case .pelvisTurnStart:
+            return String(format: "Your pelvis started about %.0f° out of square to the wall.", value)
+        case .pelvisTurnEnd:
+            return String(format: "Your pelvis finished about %.0f° out of square to the wall.", value)
         case .torsoLean:
             return String(format: "You hung about %.0f° off vertical here.", value)
+        case .torsoLeanStart:
+            return String(format: "You started about %.0f° off vertical here.", value)
+        case .torsoLeanEnd:
+            return String(format: "You finished about %.0f° off vertical here.", value)
         case .kneeDrive:
             return String(format: "Your knee came about %.2f body-lengths across your foot at its furthest.", value)
         case .pullingArmTime:
@@ -254,8 +282,12 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         case .feetSetBeforeReach: return better ? "feet set before you moved" : "hand first, feet after"
         case .footCommitmentSeconds: return better ? "you trusted your feet" : "slow to trust your feet"
         case .hipDistanceMean, .hipDistancePeak: return better ? "hips tight to the wall" : "hips away from the wall"
+        case .hipDistanceStart: return better ? "started close to the wall" : "started away from the wall"
+        case .hipDistanceEnd: return better ? "finished close to the wall" : "finished away from the wall"
         case .straightArmRatio: return better ? "you hung straight" : "you held it bent-armed"
         case .comPathLength: return better ? "a direct line" : "more movement than the move needed"
+        case .comDisplacement: return "different start-to-finish body travel"
+        case .comPathEfficiency: return better ? "a more direct body path" : "a less direct body path"
         case .comPeakVelocity: return (finding.metrics.first?.delta ?? 0) > 0 ? "you went for it" : "you kept it static"
         case .loadAsymmetry: return better ? "evenly weighted" : "one side took it"
         case .footPlacementCount: return better ? "feet placed once" : "a lot of foot shuffling"
@@ -263,8 +295,14 @@ public struct TemplateAnalysisProvider: AnalysisProvider {
         case .reachMargin: return better ? "you moved in before reaching" : "you reached from too far out"
         case .sectionDwellRatio: return finding.attemptIsWorse ? "this one cost you time" : "quicker than them here"
         case .pelvisTilt: return better ? "hips level" : "a hip dropped"
+        case .pelvisTiltStart: return better ? "started with level hips" : "started with a hip dropped"
+        case .pelvisTiltEnd: return better ? "finished with level hips" : "finished with a hip dropped"
         case .pelvisTurn: return better ? "you turned a hip in" : "you stayed square to the wall"
+        case .pelvisTurnStart: return better ? "started with a hip turned in" : "started square to the wall"
+        case .pelvisTurnEnd: return better ? "finished with a hip turned in" : "finished square to the wall"
         case .torsoLean: return better ? "you stayed under your hands" : "you hung off to one side"
+        case .torsoLeanStart: return better ? "started centered" : "started off to one side"
+        case .torsoLeanEnd: return better ? "finished centered" : "finished off to one side"
         case .kneeDrive: return better ? "knee in, hip to the wall" : "knees stacked over your feet"
         case .pullingArmTime: return better ? "you barely pulled" : "you pulled through it"
         case .latLoadTime: return better ? "your legs did the reaching" : "you pulled in with your back"

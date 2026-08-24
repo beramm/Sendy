@@ -8,6 +8,8 @@ import Foundation
 public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     case hipDistanceMean
     case hipDistancePeak
+    case hipDistanceStart
+    case hipDistanceEnd
     case armLoadShare
     case armLoadPeak
     case unweightedFootTime
@@ -15,6 +17,8 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     case footCommitmentSeconds
     case straightArmRatio
     case comPathLength
+    case comDisplacement
+    case comPathEfficiency
     case comPeakVelocity
     case loadAsymmetry
     case footPlacementCount
@@ -25,8 +29,14 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     // not shape. A coach reads the pelvis first, then the knee, then the arm;
     // these are those reads, in that order.
     case pelvisTilt
+    case pelvisTiltStart
+    case pelvisTiltEnd
     case pelvisTurn
+    case pelvisTurnStart
+    case pelvisTurnEnd
     case torsoLean
+    case torsoLeanStart
+    case torsoLeanEnd
     case kneeDrive
     case pullingArmTime
     /// Armpit closed and the hand loaded: the lat is levering the body in.
@@ -39,6 +49,8 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         switch self {
         case .hipDistanceMean: "Hip distance from wall (mean)"
         case .hipDistancePeak: "Hip distance from wall (peak)"
+        case .hipDistanceStart: "Hip distance from wall (start)"
+        case .hipDistanceEnd: "Hip distance from wall (finish)"
         case .armLoadShare: "Weight through the arms"
         case .armLoadPeak: "Weight through the arms (peak)"
         case .unweightedFootTime: "Feet on but unweighted"
@@ -46,6 +58,8 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .footCommitmentSeconds: "Time to trust a foot"
         case .straightArmRatio: "Straight-arm time"
         case .comPathLength: "Centre-of-mass path length"
+        case .comDisplacement: "Centre-of-mass start-to-finish travel"
+        case .comPathEfficiency: "Centre-of-mass path directness"
         case .comPeakVelocity: "Peak centre-of-mass speed"
         case .loadAsymmetry: "Left/right load imbalance"
         case .footPlacementCount: "Foot placements"
@@ -53,8 +67,14 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         case .reachMargin: "Reach extension at the latch"
         case .sectionDwellRatio: "Time on this move"
         case .pelvisTilt: "Hips off level"
+        case .pelvisTiltStart: "Hips off level (start)"
+        case .pelvisTiltEnd: "Hips off level (finish)"
         case .pelvisTurn: "Hips turned into the wall"
+        case .pelvisTurnStart: "Hips turned into the wall (start)"
+        case .pelvisTurnEnd: "Hips turned into the wall (finish)"
         case .torsoLean: "Lean off the plumb line"
+        case .torsoLeanStart: "Lean off the plumb line (start)"
+        case .torsoLeanEnd: "Lean off the plumb line (finish)"
         case .kneeDrive: "Knee driven past the toe"
         case .pullingArmTime: "Time pulling on the arms"
         case .latLoadTime: "Time pulling with the back"
@@ -67,14 +87,18 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     /// `MetricUnitsTests`, which fails the build if one appears.
     public var unit: String {
         switch self {
-        case .hipDistanceMean, .hipDistancePeak, .comPathLength, .reachMargin, .kneeDrive: "body-lengths"
+        case .hipDistanceMean, .hipDistancePeak, .hipDistanceStart, .hipDistanceEnd,
+             .comPathLength, .comDisplacement, .reachMargin, .kneeDrive: "body-lengths"
         case .comPeakVelocity: "body-lengths/s"
         case .straightArmRatio, .loadAsymmetry, .armLoadShare, .armLoadPeak,
              .unweightedFootTime, .feetSetBeforeReach, .pullingArmTime,
-             .latLoadTime, .elbowFlexTime, .diagonalLoadBalance: "%"
+             .latLoadTime, .elbowFlexTime, .diagonalLoadBalance,
+             .comPathEfficiency: "%"
         case .footCommitmentSeconds: "s"
         case .footPlacementCount: "count"
-        case .hipTwist, .pelvisTilt, .pelvisTurn, .torsoLean: "°"
+        case .hipTwist, .pelvisTilt, .pelvisTiltStart, .pelvisTiltEnd,
+             .pelvisTurn, .pelvisTurnStart, .pelvisTurnEnd,
+             .torsoLean, .torsoLeanStart, .torsoLeanEnd: "°"
         case .sectionDwellRatio: "×"
         }
     }
@@ -83,24 +107,26 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
     /// only to word a template sentence — never to score a climber.
     public var lowerIsBetter: Bool {
         switch self {
-        case .hipDistanceMean, .hipDistancePeak, .comPathLength, .loadAsymmetry,
+        case .hipDistanceMean, .hipDistancePeak, .hipDistanceStart, .hipDistanceEnd,
+             .comPathLength, .loadAsymmetry,
              .footPlacementCount, .reachMargin, .sectionDwellRatio,
              .armLoadShare, .armLoadPeak, .unweightedFootTime,
-             .footCommitmentSeconds, .pelvisTilt, .torsoLean, .pullingArmTime,
+             .footCommitmentSeconds, .pelvisTilt, .pelvisTiltStart, .pelvisTiltEnd,
+             .torsoLean, .torsoLeanStart, .torsoLeanEnd, .pullingArmTime,
              .latLoadTime, .elbowFlexTime, .diagonalLoadBalance: true
         // Setting your feet before you move is the thing you want *more* of.
         case .feetSetBeforeReach: false
-        case .straightArmRatio: false
-        case .comPeakVelocity, .hipTwist: false
+        case .straightArmRatio, .comPathEfficiency: false
+        case .comPeakVelocity, .comDisplacement, .hipTwist: false
         // Turning a hip in and driving a knee past the toe are what the coach
         // demonstrates *instead* of pulling. More of them is the point.
-        case .pelvisTurn, .kneeDrive: false
+        case .pelvisTurn, .pelvisTurnStart, .pelvisTurnEnd, .kneeDrive: false
         }
     }
 
     /// Metrics where a difference is only meaningful in magnitude, not in sign.
     public var isDirectionless: Bool {
-        self == .comPeakVelocity || self == .hipTwist
+        self == .comPeakVelocity || self == .comDisplacement || self == .hipTwist
     }
 }
 
@@ -287,7 +313,9 @@ public struct SectionDelta: Sendable, Codable, Hashable {
     func normalizedMagnitude(_ d: MetricDelta) -> Double {
         let scale: Double
         switch d.kind {
-        case .hipDistanceMean, .hipDistancePeak, .comPathLength, .reachMargin: scale = 0.5
+        case .hipDistanceMean, .hipDistancePeak, .hipDistanceStart, .hipDistanceEnd,
+             .comPathLength, .comDisplacement, .reachMargin: scale = 0.5
+        case .comPathEfficiency: scale = 0.3
         case .comPeakVelocity: scale = 2.0
         case .straightArmRatio, .loadAsymmetry: scale = 0.3
         case .armLoadShare, .armLoadPeak: scale = 0.25
@@ -296,8 +324,9 @@ public struct SectionDelta: Sendable, Codable, Hashable {
         case .footPlacementCount: scale = 3.0
         case .hipTwist: scale = 30.0
         case .sectionDwellRatio: scale = 1.0
-        case .pelvisTilt, .torsoLean: scale = 15.0
-        case .pelvisTurn: scale = 25.0
+        case .pelvisTilt, .pelvisTiltStart, .pelvisTiltEnd,
+             .torsoLean, .torsoLeanStart, .torsoLeanEnd: scale = 15.0
+        case .pelvisTurn, .pelvisTurnStart, .pelvisTurnEnd: scale = 25.0
         case .kneeDrive: scale = 0.4
         case .pullingArmTime, .latLoadTime, .elbowFlexTime: scale = 0.3
         case .diagonalLoadBalance: scale = 0.25

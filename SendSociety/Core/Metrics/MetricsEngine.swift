@@ -271,8 +271,46 @@ public struct MetricsEngine: Sendable {
             )
         }
         let frames = indices.map { metrics.frames[$0] }
+        // Endpoint posture is averaged over a short stable window instead of
+        // read from one frame. A single frame is especially noisy at a hand
+        // latch, and that noise was one reason Results could describe only
+        // whole-move arm/foot averages rather than start and finish position.
+        let endpointFrameCount = min(5, max(1, Int(ceil(Double(frames.count) * 0.10))))
+        let startFrames = Array(frames.prefix(endpointFrameCount))
+        let endFrames = Array(frames.suffix(endpointFrameCount))
         var values: [MetricKind: MetricValue] = [:]
         var warnings: [String] = []
+
+        func endpointDepth(_ sample: [FrameMetrics]) -> MetricValue {
+            let valid = sample.compactMap { frame -> (Double, Double)? in
+                guard let value = frame.hipDepth.zBodyLengths else { return nil }
+                return (value, frame.hipDepth.confidence)
+            }
+            let coverage = Double(valid.count) / Double(max(1, sample.count))
+            guard coverage > config.depthCoverageFloor, let mean = valid.map(\.0).mean else {
+                return .unavailable
+            }
+            return MetricValue(
+                value: mean,
+                confidence: (valid.map(\.1).mean ?? 0) * coverage
+            )
+        }
+
+        func endpointCOM(_ sample: [FrameMetrics]) -> (point: Point2D, confidence: Double)? {
+            let valid = sample.compactMap { frame -> (Point2D, Double)? in
+                guard let point = frame.com else { return nil }
+                return (point, frame.comConfidence)
+            }
+            let coverage = Double(valid.count) / Double(max(1, sample.count))
+            guard coverage > config.comCoverageFloor else { return nil }
+            return (
+                Point2D(
+                    x: valid.map { $0.0.x }.mean ?? 0,
+                    y: valid.map { $0.0.y }.mean ?? 0
+                ),
+                (valid.map(\.1).mean ?? 0) * coverage
+            )
+        }
 
         // Hip distance from wall.
         let depths = frames.compactMap { $0.hipDepth.zBodyLengths }
@@ -286,6 +324,8 @@ public struct MetricsEngine: Sendable {
             values[.hipDistancePeak] = .unavailable
             warnings.append("Hip depth unavailable on this move — no foot was anchored, or limbs sat too close to the wall plane to resolve.")
         }
+        values[.hipDistanceStart] = endpointDepth(startFrames)
+        values[.hipDistanceEnd] = endpointDepth(endFrames)
 
         // Straight-arm ratio.
         var straight = 0, armSamples = 0
@@ -312,6 +352,23 @@ public struct MetricsEngine: Sendable {
         values[.comPathLength] = comCoverage > config.comCoverageFloor
             ? MetricValue(value: path, confidence: comCoverage)
             : .unavailable
+        if let start = endpointCOM(startFrames), let end = endpointCOM(endFrames) {
+            let displacement = metrics.scale.distance(start.point, end.point)
+            let endpointConfidence = min(start.confidence, end.confidence)
+            values[.comDisplacement] = MetricValue(
+                value: displacement,
+                confidence: endpointConfidence
+            )
+            values[.comPathEfficiency] = path > 1e-6
+                ? MetricValue(
+                    value: (displacement / path).clamped(to: 0 ... 1),
+                    confidence: min(comCoverage, endpointConfidence)
+                )
+                : .unavailable
+        } else {
+            values[.comDisplacement] = .unavailable
+            values[.comPathEfficiency] = .unavailable
+        }
         let speeds = frames.compactMap(\.comSpeed)
         values[.comPeakVelocity] = speeds.isEmpty
             ? .unavailable
@@ -430,11 +487,44 @@ public struct MetricsEngine: Sendable {
         // the thing being coached.
         let pelvises = frames.compactMap(\.posture.pelvis)
         let pelvisCoverage = Double(pelvises.count) / Double(frames.count)
+
+        func endpointPelvisTilt(_ sample: [FrameMetrics]) -> MetricValue {
+            let tilts = sample.compactMap { $0.posture.pelvis.map { abs($0.tiltDegrees) } }
+            let coverage = Double(tilts.count) / Double(max(1, sample.count))
+            guard let mean = tilts.mean else { return .unavailable }
+            return MetricValue(value: mean, confidence: coverage)
+        }
+
+        func endpointPelvisTurn(_ sample: [FrameMetrics]) -> MetricValue {
+            let turns = sample.compactMap { frame -> (Double, Double)? in
+                guard let pelvis = frame.posture.pelvis,
+                      let turn = pelvis.turnDegrees
+                else { return nil }
+                return (turn, pelvis.turnConfidence)
+            }
+            let weight = turns.map(\.1).reduce(0, +)
+            guard weight > 1e-6 else { return .unavailable }
+            let coverage = Double(turns.count) / Double(max(1, sample.count))
+            return MetricValue(
+                value: turns.map { $0.0 * $0.1 }.reduce(0, +) / weight,
+                confidence: (weight / Double(turns.count)) * coverage
+            )
+        }
+
+        func endpointTorsoLean(_ sample: [FrameMetrics]) -> MetricValue {
+            let leans = sample.compactMap(\.posture.torsoLeanDegrees).map(abs)
+            let coverage = Double(leans.count) / Double(max(1, sample.count))
+            guard let mean = leans.mean else { return .unavailable }
+            return MetricValue(value: mean, confidence: coverage)
+        }
+
         if let tilt = pelvises.map({ abs($0.tiltDegrees) }).mean {
             values[.pelvisTilt] = MetricValue(value: tilt, confidence: pelvisCoverage)
         } else {
             values[.pelvisTilt] = .unavailable
         }
+        values[.pelvisTiltStart] = endpointPelvisTilt(startFrames)
+        values[.pelvisTiltEnd] = endpointPelvisTilt(endFrames)
 
         // Turn is confidence-weighted rather than averaged flat: near square the
         // estimate is arbitrary, and averaging arbitrary numbers with real ones
@@ -454,11 +544,15 @@ public struct MetricsEngine: Sendable {
             values[.pelvisTurn] = .unavailable
             warnings.append("Hip rotation was unmeasurable on this move — the pelvis stayed close to square to the camera, where hip width barely changes with angle.")
         }
+        values[.pelvisTurnStart] = endpointPelvisTurn(startFrames)
+        values[.pelvisTurnEnd] = endpointPelvisTurn(endFrames)
 
         let leans = frames.compactMap(\.posture.torsoLeanDegrees).map(abs)
         values[.torsoLean] = leans.isEmpty
             ? .unavailable
             : MetricValue(value: leans.mean!, confidence: Double(leans.count) / Double(frames.count))
+        values[.torsoLeanStart] = endpointTorsoLean(startFrames)
+        values[.torsoLeanEnd] = endpointTorsoLean(endFrames)
 
         let kneeDrives = frames.compactMap(\.posture.kneeDriveBodyLengths)
         values[.kneeDrive] = kneeDrives.isEmpty

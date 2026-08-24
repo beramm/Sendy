@@ -11,7 +11,7 @@ Update the relevant sections when changing:
 - what a sequence means or how numbered navigation works;
 - Side by Side, Overlay, skeleton, playback, scrubbing, or synchronization;
 - sequence-analysis inputs, aggregation, priority, output, fall, or divergence handling;
-- observation/cause wording or color meaning;
+- paired main-difference observation/cause vocabulary, ranking, availability, or color meaning;
 - metrics, comparison availability, empty states, or low-confidence behavior;
 - Results file ownership or architecture.
 
@@ -31,24 +31,26 @@ The screen should:
 
 1. Show synchronized visual evidence.
 2. Let the user select a sequence.
-3. Present exactly one primary finding for that whole sequence.
-4. Express the finding as an observation plus a cause when measurements support a cause.
+3. Present one shared main difference for the whole sequence from REF's side and YOU's side, written as one natural sentence per card.
+4. Prefer a deterministic, licensed observation-and-cause pair. When the measurements show a real difference but do not license causality, report the strongest measured contrast honestly instead of displaying **Causal insight unavailable**.
 5. Keep supporting measurements available without making them the main story.
 
 ## Approved sequence-detail presentation
 
-`Sequence Detail.png` is the current visual reference.
+`Sequence Detail.png` is the current result-screen reference. `Tutorial.png` is the current Detailed Analytics sheet reference. Treat both as layout references; their placeholder metric copy is not product data.
 
 - The close button sits alone at the top trailing edge. Display controls occupy a row below it.
 - Side by Side and Overlay use a two-option control. The selected segment is white with black text; the unselected segment uses muted text on the shared dark surface.
-- The skeleton and overflow buttons use the same dark surface and `18pt` continuous radius. The active skeleton button is white with a black icon.
-- Side-by-side video panes use the source aspect ratio and a `16pt` continuous radius. REF and YOU are white capsule badges inside the footage.
+- The skeleton and overflow buttons use the same dark surface and `18pt` continuous radius. The skeleton button uses the supplied `ResultsSkeleton` SVG; its active background is accent green and its icon is black.
+- Side-by-side video panes use the source aspect ratio and a `16pt` continuous radius. REF and YOU are dark capsule badges inside the footage, with REF text in accent green and YOU text in blue.
+- Skeleton identity is stable in every display mode: REF is accent green and YOU is blue. Do not use the old orange attempt color.
 - Overlay preserves the processed wall-plate image, route marks, and both synchronized skeletons. It has exactly the same width and height as one Side by Side pane and is centered in the row. Wall and skeleton geometry remain aspect-fit and at the same scale as one video pane. The diagnostic gray fallback is disabled; a missing wall plate exposes the near-black Results surface.
-- Sequence buttons use a `15pt` radius. A reference/attempt move-count difference uses the bright accent with dark text. Selection uses the same accent plus bold numbering and a larger scale. A fall takes priority: red background, white text, and a small `F`; bold type and scale still communicate selection.
+- Sequence buttons use a `15pt` radius and intentionally vary in width: ordinary buttons are `52pt`, move-count-different buttons are `64pt`, and the selected button is `72pt` wide and `48pt` tall. A reference/attempt move-count difference uses the bright accent with dark text. Selection uses the same accent plus bold numbering and the largest dimensions. A fall takes priority: red background, white text, and a small `F`; bold type and the selected dimensions still communicate selection.
 - Playback uses a plain white play/pause symbol beside the scrubber. Playback and scrubbing are always synchronized.
-- The insight and Detailed Analytics surfaces use an opaque near-black fill and `30pt` continuous radius.
-- Observation and cause are separate sentences: observation is white; a supported cause is accent green.
-- The analytics entry point is always titled **Detailed Analytics** with a trailing chevron. Its sheet owns both metric rows and explanations for unavailable numbers.
+- Plain centered text identifies `Sequence n of count` below playback. It has no capsule or other background; `Sequence` is muted and `n of count` is white and bold.
+- Two equal-width near-black cards use a `16pt` continuous radius and compact `112pt` minimum height. Each card shows its colored REF/YOU badge, that climber's duration for the selected sequence, and one centered sentence for its side of the same analysis. Insight text has no line cap: it wraps completely and the card grows vertically instead of truncating with an ellipsis. Licensed observation and cause remain separate in Core and are joined with “because.” A non-causal secondary contrast uses “while”; one significant measurement stands alone. Do not show Observation/Cause subtitles, separate sections, a divider, or separate cause styling. Muted unavailable cards are reserved for absent or unreliable comparison data, not for a missing causal rule.
+- The analytics entry point is always titled **Detailed Analytics** with a trailing chevron, a `16pt` radius, and a compact `56pt` minimum height.
+- The Detailed Analytics sheet uses a fixed opaque gray surface, a `30pt` top radius, the system drag indicator, and a `0.61` initial detent. Its centered title renders **Detailed** in white and **Analytics** in accent green. Each metric has a slim white leading rule, title and unit, then YOU and REFERENCE bars. Identity remains consistent with Results: REF/REFERENCE is green and YOU is blue. The sheet owns both metric rows and explanations for unavailable numbers.
 
 These are fixed visual tokens. Avoid adding `.glassEffect` to these Results surfaces because it changes their color and apparent radius across backgrounds.
 
@@ -66,9 +68,11 @@ Marker states:
 
 - fall in sequence: red with `F`;
 - different reference/attempt move counts: bright accent;
-- selected: bright accent, bold number, and larger scale;
+- selected: bright accent, bold number, and the widest/tallest button dimensions;
 - fall overrides the background color when states overlap;
 - ordinary unselected sequence: neutral dark surface.
+
+Move-count difference is navigation context only. It must never produce **Used fewer moves** or **Used more moves** in the insight cards because that states a difference without explaining its cause.
 
 ### 2. What do Side by Side, Overlay, and the skew button do?
 
@@ -87,25 +91,25 @@ The Overlay card uses the dimensions of one Side by Side pane and is centered. T
 
 **User answer:** The primary coaching insight.
 
-**Decision:** Show one prioritized insight, not a metric dump or a list of every move finding.
+**Current decision:** The paired cards show the selected sequence's strongest shared measured difference. A licensed cause is preferred—for example REF **Kept more weight off the arms** because they **Stayed closer to the wall**, while YOU **Put more weight through the arms** because they **Stayed farther from the wall**. If no causal pair clears the thresholds, the cards show the strongest measured body-position contrast with contextual wording rather than claiming causality or pretending no insight exists. The cards never select unrelated traits independently.
 
 ### 4. What is the insight structure?
 
 **User answer:** Just observation and cause.
 
-**Decision:** Use `SequenceAnalysis.observation` plus optional `SequenceAnalysis.cause`. Drills, warnings, and multiple per-move observations stay out of the main card.
+**Superseding decision:** The designer replaced the single comparison card with paired REF and YOU analyses. Results reads `SequenceAnalysis.referenceFinding` and `SequenceAnalysis.attemptFinding`; both are produced by one main-difference decision. Observation and cause are an internal reasoning structure, not two visible UI sections. `SequenceDifferenceFinding.sentence(subject:causeSubject:)` joins a licensed cause with “because,” or a supporting but non-causal measurement with “while.” If only one reliable difference clears significance, it remains a plain observation. The comparative `SequenceAnalysis.observation` and optional `SequenceAnalysis.cause` remain in Core for structural, fall, comparison-validity, and unavailable explanations. Drills, warnings, and multiple per-move observations remain out of the main screen.
 
 ### 5. Which text receives the green accent?
 
 **User answer:** The cause.
 
-**Decision:** Observation is white. Green is reserved for a measured cause. When `cause` is absent, all text is intentionally white. Do not invent a cause merely to guarantee green text.
+**Superseding decision:** Green now identifies REF, while blue identifies YOU. The badges, skeletons, and Detailed Analytics bars follow that identity contract. Main finding text is white when available and muted when unavailable. Green is no longer a marker for the old cause sentence.
 
 ### 6. How should supporting detail be presented?
 
 **User answer:** Use the recommended approach.
 
-**Accepted recommendation:** Keep the main card concise and put only measurements supporting the selected sequence finding in Detailed Analytics.
+**Accepted recommendation:** Keep both main cards concise and put the selected sequence's supporting measurements in Detailed Analytics. When comparison is invalid, never synthesize a reference value merely to complete the visual pair.
 
 ### 7. Were the original analytics per move, and how did the old implementation work?
 
@@ -113,7 +117,7 @@ The Overlay card uses the dimensions of one Side by Side pane and is centered. T
 
 **Answer:** The deleted diagnostic screen navigated by sequence but displayed every per-move `SectionAnalysis` whose reference move belonged to that sequence. That was sequence-shaped navigation, not sequence-level coaching.
 
-**Current decision:** The pipeline creates one `SequenceAnalysis` for every `ClimbSequence`, and `ResultsView` presents that item directly. It must not select, merge, or generate coaching prose from per-move analyses. The pipeline still produces `[SectionAnalysis]` for provider compatibility and instrumentation, but Results does not display it.
+**Current decision:** The pipeline creates one `SequenceAnalysis` container for every `ClimbSequence`. That container includes paired REF/YOU wording for one shared main difference, the existing comparison state, and supporting numbers. `ResultsView` must not select, merge, or generate coaching prose from per-move analyses. The pipeline still produces `[SectionAnalysis]` for provider compatibility and instrumentation, but Results does not display it.
 
 ### 8. How should divergent or non-comparable sequences work?
 
@@ -143,11 +147,82 @@ The Overlay card uses the dimensions of one Side by Side pane and is centered. T
 2. Measures the attempt's complete range between the same anchors.
 3. Builds a delta from those two whole-span measurements.
 4. Uses move deltas only for fall attribution or as fallback evidence when a direct sequence comparison cannot be built.
-5. Runs deterministic finding rules against the sequence delta.
-6. Selects one primary finding and at most four supporting metrics.
-7. Returns one observation with an optional defensible cause.
+5. Resolves fall and non-comparable structural states before metric ranking.
+6. Keeps move-count differences in the sequence-strip state but excludes them from insight selection.
+7. Builds candidate findings from a sequence-specific causal catalog. Both metrics must be significant, confident, and point in the licensed same/opposite direction.
+8. Ranks causal candidates by their weaker normalized signal, so a large observation cannot borrow credibility from a barely visible cause. Body-position and COM relationships appear before the legacy arm/foot relationships to avoid an arm-first tie bias.
+9. Returns two `SequenceDifferenceFinding` values from the selected shared evidence. Licensed pairs use “outcome because cause.”
+10. When no causal pair is licensed, uses the two strongest significant measurements as an explicitly contextual “outcome while context” pair; if only one is significant, reports that observation alone. If reliable measurements exist but none is significant, reports measured similarity.
+11. Uses unavailable cards only when the comparison itself or its measurements are absent/unreliable. Move count stays navigation context and never becomes a biomechanical cause.
+12. Keeps reliable supporting measurements in Detailed Analytics, with the selected observation metric first, up to four unique metrics.
+13. Retains the comparative observation/cause for fall, structure, validity, and unavailable explanations.
 
 Direct range measurement matters when one climber uses one move and the other uses several. Their individual moves do not correspond, but their complete movement between two shared anchors does.
+
+### Shared main-difference selection
+
+The card pair answers one question: **what was most different in this sequence?** Selection order is:
+
+1. fall or its attributed cause sequence;
+2. non-comparable structure such as truncation, different hold order, or another divergence;
+3. the strongest licensed causal finding whose two metrics both clear significance and confidence requirements, with a clear hip-supported finding preferred over a stronger non-hip finding;
+4. the strongest two significant metrics as contextual evidence, joined with “while,” when no causal relationship is licensed;
+5. a single significant observation when it is the only reliable difference;
+6. measured similarity when reliable metrics exist but remain below significance;
+7. unavailable cards only when comparison data is missing or below the reliability floor.
+
+Both cards always use the same primary `MetricKind`, and a two-metric sentence uses the same secondary `MetricKind` on both sides. The higher and lower values receive complementary wording. The `relationship` field distinguishes a licensed **because** statement from honest **while** context, so Results never turns correlation into causation. This is relative wording, not an absolute technique classification.
+
+Hip priority is intentionally conditional rather than absolute. A causal pair involving hip distance, hip rotation, or hip tilt receives first priority only when its weaker measurement reaches the configured **clear** magnitude (`deltaSignificanceThreshold × clearMagnitudeMultiple`). If the hip evidence is slight, low-confidence, unavailable, or has no licensed relationship, the selector uses the strongest valid non-hip pair instead. This keeps the coaching centered on the pelvis without turning tracking noise into advice.
+
+### Insight measurement catalog
+
+The sequence pipeline intentionally covers more than arms and feet. The current list is:
+
+- hip distance from the wall: start-window, finish-window, mean, and peak;
+- pelvis position: turn, tilt, and torso lean across the sequence plus start-window and finish-window values;
+- center of mass: total path length, direct start-to-finish displacement, path directness (`displacement / path length`), and peak velocity;
+- lower-body position: knee drive, feet set before reaching, foot commitment time, unweighted-foot time, and foot placements;
+- reach and balance: reach margin, left/right load asymmetry, and diagonal load imbalance;
+- upper-body use: mean/peak arm load, straight-arm ratio, active pulling time, back/shoulder levering time, and bent-loaded-arm time;
+- timing: sequence dwell ratio.
+
+Start and finish values use the first/last 10% of frames, capped at five frames, rather than one potentially noisy frame. Hip depth and COM endpoints retain their estimator confidence and coverage gates. Pelvis turn remains confidence-weighted because near-square projected hip width is unstable. These measurements are computed in Swift; prose never estimates them from the image.
+
+### Causal direction contract
+
+Every licensed pair is ordered as **observed outcome because measured cause**. Reversing these roles produces misleading sentences and is a bug. The current mappings are:
+
+- finish hip distance because finish pelvis turn changed in the opposite direction;
+- finish hip distance because knee drive changed in the opposite direction;
+- reach distance because finish hip distance changed in the same direction;
+- COM path directness because foot-placement count changed in the opposite direction;
+- COM path length because foot-placement count changed in the same direction;
+- start-to-finish COM progress because COM directness changed in the same direction;
+- longer sequence time because COM path length increased or path directness decreased;
+- less even loading because finish torso lean or finish pelvis tilt increased;
+- finish pelvis turn because knee drive changed in the same direction;
+- arm load because hips stayed farther from the wall;
+- arm load because finish hip distance increased;
+- arm load because the feet remained unweighted;
+- arm load because the hand moved before the feet were set;
+- longer sequence time because weight was committed to a foot later;
+- longer centre-of-mass path because more foot placements were used;
+- arm load because the climber reached from farther away;
+- arm load because the arms stayed more bent; therefore write **kept more weight off the arms because they used straighter arms**, never **used straighter arms because they kept weight off the arms**;
+- longer back/shoulder levering or bent loaded-arm time because average hip distance increased;
+- longer back/shoulder levering or bent loaded-arm time because the hips stayed squarer to the wall;
+- longer back/shoulder levering because more weight stayed on the arms;
+- longer time holding bent, loaded arms because more weight stayed on the arms;
+- longer active pulling because the hips stayed square to the wall;
+- less even loading because the torso leaned farther off vertical;
+- arm load because the pelvis stayed more tilted.
+
+Start/finish posture pairs that do not match a licensed mechanism can still appear together with **while**, but never with **because**. This is important for hip placement and body position: the difference remains visible without manufacturing a biomechanical explanation.
+
+`Finding.metrics` preserves this semantic order: index 0 is the observation/outcome and index 1 is the cause. `SequenceAnalysisComposer` must use `Finding.observationMetric` and `Finding.causeMetric` rather than inferring roles from normalized magnitude.
+
+The current `kneeDrive` sequence metric stores only the larger absolute left/right magnitude. It does not preserve which knee produced it. Therefore Results must say **more/less knee drive** and must not claim **right leg** or **left leg** until Core carries side identity through the metric model.
 
 ## Core integration owned by Results
 
@@ -155,17 +230,20 @@ The Results UI is flat under `SendSociety/App/Results`, but its data contract in
 
 ### `Core/Analysis/SequenceAnalysisComposer.swift`
 
-- Defines `SequenceAnalysis`, the one-result-per-sequence model consumed by `ResultsView`.
-- Stores the observation, optional cause, supporting metrics, comparison validity, unavailable reason, and contributing move indices.
+- Defines `SequenceDifferenceFinding` and `SequenceAnalysis`, the one-container-per-sequence model consumed by `ResultsView`.
+- Stores paired reference and attempt analyses for one shared main difference. Each side carries an observation, optional secondary measurement, relationship (`because` or contextual `while`), supporting metrics, comparison validity, unavailable reason, and contributing move indices. Its sentence formatter combines these without visible substructure.
+- Resolves fall and non-comparable states first, then ranks complete causal findings using the existing normalized significance scale. Move-count structure does not pre-empt a metric insight.
+- Generates complementary wording from the same metrics for REF and YOU. A measured difference without a licensed cause becomes contextual/single-metric wording, not **Causal insight unavailable**.
 - Composes one prioritized result from a direct whole-sequence delta when available.
 - Uses move deltas only for fall attribution or deterministic fallback evidence.
-- Keeps additive metrics such as COM path length and foot-placement count as totals; other metrics are confidence-weighted typical values.
-- Limits supporting metrics to four and never invents a cause for a move-count difference.
+- Keeps additive metrics such as COM path length, COM displacement, and foot-placement count as totals when direct sequence measurement is unavailable; other fallback metrics are confidence-weighted typical values.
+- Limits supporting metrics to four and never presents move count as a coaching insight.
 
 ### `Core/Metrics/MetricsEngine.swift`
 
 - Adds `sequenceMetrics(climbSequence:range:metrics:poseSequence:contacts:targetHold:config:)` so a complete anchor-to-anchor range can be measured independently of its internal move count.
 - Refactors move and sequence measurement through the same private `rangeMetrics` implementation, preventing the two paths from drifting.
+- Measures stable start/finish windows for hip distance, pelvis tilt, pelvis turn, and torso lean, plus direct COM displacement and COM path directness. It also separates loaded-arm effort into back/shoulder levering (`latLoadTime`), bent loaded-arm holding (`elbowFlexTime`), and the overlap where both occur (`pullingArmTime`). These metrics feed both Results insights and Detailed Analytics.
 - Adds a sequence-specific `delta` overload. Its `SectionDelta` is indexed and named by the sequence and deliberately has no move-level `BetaDivergence`, because different intermediate moves do not invalidate two reliable shared endpoints.
 - Existing move-level `sectionMetrics` and `delta(section:...)` behavior remains available for pipeline compatibility.
 
@@ -175,13 +253,14 @@ The Results UI is flat under `SendSociety/App/Results`, but its data contract in
 - Adds `analysis(forSequence:)` and `delta(forSequence:)` lookup helpers used by Results and tests.
 - Measures direct sequence spans only when both anchors are valid, distinct, reached, and mapped to a target hold.
 - Uses each sequence's DTW mean cost when building the direct delta.
-- Runs `SequenceAnalysisComposer` once for every `ClimbSequence`, including sequences without a valid direct comparison so each sequence still receives an honest unavailable, structural, fall, or attempt-only result.
+- Runs `SequenceAnalysisComposer` once for every `ClimbSequence`, including sequences without a valid direct comparison so each sequence still receives paired main-difference wording plus an honest unavailable, structural, fall, or attempt-only comparison state.
 - Keeps move-level analyses for provider compatibility and instrumentation; `ResultsView` reads only sequence analyses.
 - Reports both move and sequence counts in the Metrics and Analysis pipeline stages.
 
 ### Core verification
 
-- `Tests/VideoOverlapCoreTests/SequenceAnalysisTests.swift` verifies cross-move composition, move-count structural findings, attempt-only divergence handling, shared-anchor comparability, and open-ended non-comparison.
+- `Tests/VideoOverlapCoreTests/SequenceAnalysisTests.swift` verifies cross-move composition, paired causal selection and direction, conditional hip-priority ranking, alignment between the selected sentence and its displayed evidence, hip-placement, COM, back/shoulder, and bent-loaded-arm causal rules, contextual body-position fallback, measured similarity, low-confidence unavailable findings, attempt-only divergence handling, shared-anchor comparability, and open-ended non-comparison.
+- `Tests/VideoOverlapCoreTests/MetricsTests.swift` verifies that stable endpoint windows retain start/finish hip distance and posture plus COM displacement/directness.
 - `Tests/VideoOverlapCoreTests/ProcessingTests.swift` verifies the pipeline produces exactly one `SequenceAnalysis` for every `ClimbSequence`.
 - Any change to these Core contracts requires both the Swift package tests and the iOS build because Core output and Results presentation compile in separate targets.
 
@@ -198,19 +277,17 @@ A sequence is non-comparable when reliable endpoints cannot be established, incl
 
 An internal move-level divergence does not by itself invalidate an anchor-bounded sequence.
 
-## Insight color behavior
+## Identity color behavior
 
-Green means **cause**, not generic emphasis.
-
-- Observation plus supported cause: white observation, green cause.
-- Structural observation without supported cause: all white.
-- Similar, divergent, unavailable, and fall results may contain green only when their data includes a cause or explanation in the cause field.
-
-If the product later requires emphasis in every insight, extend the model to distinguish cause, evidence, and generic emphasis. Do not silently color arbitrary observation words green.
+- REF is accent green in video badges, skeletons, difference-card badges, and Detailed Analytics.
+- YOU is blue in the same surfaces.
+- The complete available main-difference sentence is white; unavailable comparison text is muted. Cause text is not colored or styled separately inside the sentence.
+- Accent green also marks the active skeleton button and selected or move-count-different sequence buttons. Those are control/state meanings, not a third climber identity.
+- Fall remains red with `F` and takes priority over normal sequence-button background colors.
 
 ## Detailed Analytics availability
 
-`SequenceAnalysis.metrics` contains only reliable metrics relevant to the selected finding. It may be empty when:
+`SequenceAnalysis.metrics` contains reliable sequence metrics selected for comparative detail. Standalone metrics remain here even when they cannot produce a causal insight. When a causal metric drives the card pair, that observation metric is placed first. The array may be empty when:
 
 - pose confidence is below the configured floor;
 - the attempt never reached the sequence;
@@ -226,14 +303,21 @@ Priority:
 
 1. Fall attributable to this sequence.
 2. When direct comparison is unavailable: divergence, truncation, or not reached.
-3. Coaching finding supported by direct sequence metrics.
-4. Structural move-count difference.
-5. Similar-to-reference result with reliable metrics.
-6. Unavailable result.
+3. Strongest licensed causal finding.
+4. Strongest contextual or standalone significant difference.
+5. Measured similarity.
+6. Unavailable only when comparison data is missing or unreliable.
 
 Invariants:
 
-- Produce exactly one main result per sequence.
+- Produce exactly one `SequenceAnalysis` container and one paired main difference per sequence.
+- Both metric-derived cards must refer to the same primary `MetricKind` and, when present, the same secondary `MetricKind`.
+- For a `because` relationship, the observation metric must be the outcome and the cause metric must explain it. Never reverse them for ranking or wording.
+- Observation and cause must render as one sentence per card with no subtitles or divider.
+- Never label contextual evidence as causal. Use `whileContext`, and reserve unavailable state for missing/unreliable data.
+- Never use move count as the insight; its difference is already communicated by the sequence-button state.
+- Never force a difference below `deltaSignificanceThreshold`.
+- Never infer a left/right limb label from the current side-agnostic knee-drive metric.
 - Never claim reference comparison when `comparisonIsValid` is false.
 - Do not invalidate an anchor-bounded sequence solely because an internal move diverges.
 - Never invent a biomechanical cause from move count alone.
@@ -251,6 +335,7 @@ All paths are relative to the repository root and all Results UI files are flat 
 - `FrameImageCache.swift`: coarse/exact still-frame decoding and caching.
 - `SkeletonCanvas.swift`: skeleton, wall plate, posture overlays, and aspect-fit mapping.
 - `ComparisonVideoPane.swift`: aspect-fit video cards and visual tokens.
+- `SendSociety/Assets.xcassets/ResultsSkeleton.imageset`: the designer-supplied template SVG used by the skeleton control.
 - `SendSociety/Core/Analysis/SequenceAnalysisComposer.swift`: sequence analysis model and composition rules.
 - `SendSociety/Core/Metrics/MetricsEngine.swift`: whole-sequence measurement and sequence-delta construction.
 - `SendSociety/Core/Processing/ProcessingPipeline.swift`: constructs move and sequence outputs.
@@ -263,5 +348,5 @@ When changing Results:
 
 1. Run Swift package tests, especially `SequenceAnalysisTests`.
 2. Build the iOS app with code signing disabled.
-3. Inspect supported cause, observation without cause, valid comparison, attempt-only metrics, unavailable numbers, not reached, fall, move-count difference, and multi-sequence navigation.
+3. Inspect paired REF/YOU sentences for correct outcome-before-cause direction and natural grammar, no internal subtitles/divider, hip/COM/body-position variety, contextual `while` fallback, measured similarity, low-confidence unavailable cards, move count staying out of the insight, valid comparison, attempt-only metrics, not reached, fall, and multi-sequence navigation.
 4. Confirm both panes remain synchronized during sequence changes, scrubbing, and playback.

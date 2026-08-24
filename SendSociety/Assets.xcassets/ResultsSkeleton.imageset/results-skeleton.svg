@@ -1,0 +1,19 @@
+<svg width="25" height="24" viewBox="0 0 25 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<ellipse cx="16.1231" cy="7.31546" rx="1.63868" ry="1.67679" fill="black"/>
+<ellipse cx="23.1309" cy="3.96195" rx="1.63868" ry="1.67679" fill="black"/>
+<ellipse cx="12.5394" cy="2.21032" rx="2.17221" ry="2.21032" fill="black"/>
+<ellipse cx="14.6738" cy="15.169" rx="1.63868" ry="1.67679" fill="black"/>
+<ellipse cx="10.4863" cy="15.169" rx="1.63868" ry="1.67679" fill="black"/>
+<path d="M10.2149 22.1787C10.2149 23.1048 9.4812 23.8555 8.57618 23.8555C7.67116 23.8555 6.9375 23.1048 6.9375 22.1787C6.9375 21.2527 7.67116 20.502 8.57618 20.502C9.4812 20.502 10.2149 21.2527 10.2149 22.1787Z" fill="black"/>
+<ellipse cx="16.3535" cy="22.1787" rx="1.63868" ry="1.67679" fill="black"/>
+<ellipse cx="9.03321" cy="7.31546" rx="1.63868" ry="1.67679" fill="black"/>
+<rect x="11.6641" y="0.382812" width="1.82923" height="13.5668" rx="0.914614" fill="black"/>
+<rect x="9.72656" y="13.9453" width="1.82923" height="8.85578" rx="0.914614" transform="rotate(13.8053 9.72656 13.9453)" fill="black"/>
+<rect width="1.82923" height="9.10731" rx="0.914614" transform="matrix(-0.971112 0.238623 0.238623 0.971112 15.3438 14.0977)" fill="black"/>
+<ellipse cx="1.82923" cy="1.67679" rx="1.82923" ry="1.67679" transform="matrix(-1 0 0 1 3.66016 2.28516)" fill="black"/>
+<rect width="1.89997" height="8.43847" rx="0.949986" transform="matrix(-0.498381 0.866958 0.913353 0.407169 2.09375 3.125)" fill="black"/>
+<rect width="1.89997" height="8.43847" rx="0.949986" transform="matrix(0.498381 0.866958 -0.913353 0.407169 22.9492 3.125)" fill="black"/>
+<rect x="16.0078" y="6.40234" width="1.82923" height="6.93582" rx="0.914614" transform="rotate(90 16.0078 6.40234)" fill="black"/>
+<rect x="12.3516" y="12.041" width="1.82923" height="3.81089" rx="0.914614" transform="rotate(49.537 12.3516 12.041)" fill="black"/>
+<rect x="15.6836" y="14.9414" width="1.82923" height="3.81089" rx="0.914614" transform="rotate(139.537 15.6836 14.9414)" fill="black"/>
+</svg>
