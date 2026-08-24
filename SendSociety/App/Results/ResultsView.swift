@@ -1,257 +1,536 @@
 import SwiftUI
 
-/// Position on the climb, expressed as **sequence N of M plus an offset within
-/// the sequence**.
-///
-/// Indexed by sequence, not by move and not by time. There is no shared clock —
-/// one climber may take 7s through a stretch and the other 1s — and a move
-/// index is no better, because the two climbers can take a different number of
-/// moves across the same span. "Move 6" then names two different places at
-/// once. A sequence is bounded by holds both of them actually took, so it names
-/// one position in a locked pair by construction.
-struct MovePosition: Equatable {
-    /// Index into `ProcessedSession.sequences.sequences`.
-    var sectionIndex: Int = 0
-    /// 0...1 within the sequence.
-    var offset: Double = 0
+private enum ResultsDisplayMode: String, CaseIterable, Identifiable {
+    case sideBySide = "Side by Side"
+    case overlay = "Overlay"
+
+    var id: String { rawValue }
 }
 
 struct ResultsView: View {
+    private static let playbackStep = 0.125
+
     @Environment(AppModel.self) private var model
 
-    @State private var mode: ComparisonMode = .sideBySide
-    @State private var position = MovePosition()
+    @State private var displayMode: ResultsDisplayMode = .sideBySide
+    @State private var skeletonEnabled = false
     @State private var overlays = AnalyticalOverlays()
-    @State private var syncLocked = true
-    @State private var attemptOffsetOverride: Double?
-    @State private var showWarnings = false
-    /// True while a finger is on either scrubber slider. Panes decode
-    /// keyframes while it is true and the exact frame when it goes false —
-    /// this is most of what makes the scrubber feel attached to the video.
+    @State private var position = MovePosition()
+    @State private var isPlaying = false
     @State private var isScrubbing = false
-    /// One cache for the whole screen. Per-pane caches meant a mode switch
-    /// threw away every decoded frame, and the two panes never shared a
-    /// generator.
+    @State private var showNumbers = false
     @State private var frameCache = FrameImageCache()
+    private let showsPreviewArtwork: Bool
+
+    init(
+        initialPosition: MovePosition = MovePosition(),
+        showsPreviewArtwork: Bool = false
+    ) {
+        _position = State(initialValue: initialPosition)
+        self.showsPreviewArtwork = showsPreviewArtwork
+    }
 
     var body: some View {
         ZStack {
             AppBackground()
-            Group {
-                if let processed = model.processed {
-                    content(processed)
-                } else {
-                // Fail soft: never a blank screen.
-                List {
-                    SwiftUI.Section("Nothing processed yet") {
-                        Text("Run the pipeline to see results.")
-                        Button("Process") { model.process() }
-                    }
-                }
-                }
+
+            if let processed = model.processed,
+               !processed.sequences.sequences.isEmpty {
+                results(processed)
+            } else {
+                unavailableState
             }
         }
-        .navigationTitle("Results")
+        .foregroundStyle(.white)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .task(id: isPlaying) { await runPlayback() }
     }
 
-    @ViewBuilder
-    private func content(_ processed: ProcessedSession) -> some View {
-        if processed.sections.isEmpty {
-            // Task 5.8 — legible, not pretty.
-            VStack(spacing: 8) {
-                errorPanel(processed)
-                footer(processed)
-            }
-            .sheet(isPresented: $showWarnings) { warningsSheet(processed) }
-        } else {
-            // **The page scrolls, not a panel inside it.**
-            //
-            // Every fixed-height box on this screen was competing with the
-            // video for the same points, and the analysis text ended up in a
-            // 140pt window with its own scrollbar — a scroll gesture that only
-            // worked if your thumb landed on the right third of the screen.
-            // One outer scroll view puts every gesture in the same place and
-            // lets the video keep a real share of the height.
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack(spacing: 8) {
-                        Picker("Mode", selection: $mode) {
-                            ForEach(ComparisonMode.allCases) { Text($0.label).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal)
+    private func results(_ processed: ProcessedSession) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
+                    header
+                        .padding(.bottom, 16)
 
-                        // A definite height: `maxHeight: .infinity` inside a
-                        // scroll view resolves to the content's own ideal size,
-                        // which for a video pane is nothing.
-                        comparison(processed)
-                            .frame(height: max(300, geometry.size.height * 0.62))
+                    comparison(processed)
+                        .frame(height: comparisonHeight(for: geometry.size, processed: processed))
 
-                        MoveScrubber(
-                            processed: processed,
-                            position: $position,
-                            syncLocked: $syncLocked,
-                            attemptOffsetOverride: $attemptOffsetOverride,
-                            isScrubbing: $isScrubbing
-                        )
-                        .padding(.horizontal)
+                    sequencePicker(processed)
+                        .padding(.top, 20)
 
-                        if mode == .skeletonOnly || mode == .skeletonOverlay {
-                            OverlayToggles(
-                                overlays: $overlays,
-                                showsDivergence: mode == .skeletonOnly,
-                                showsBackdrop: mode == .skeletonOnly && processed.wallPlate != nil
-                            )
-                                .padding(.horizontal)
-                        }
+                    playbackControls
+                        .padding(.top, 18)
 
-                        currentAnalysis(processed)
-                        footer(processed)
-                    }
+                    insightCard(processed)
+                        .padding(.top, 24)
+
+                    numbersButton(processed)
+                        .padding(.top, 18)
+                        .padding(.bottom, 32)
                 }
+                .padding(.horizontal, 18)
+                .frame(minHeight: geometry.size.height, alignment: .top)
             }
-            .sheet(isPresented: $showWarnings) { warningsSheet(processed) }
+            .scrollIndicators(.hidden)
         }
+        .sheet(isPresented: $showNumbers) {
+            if let insight = currentInsight(processed) {
+                ResultNumbersSheet(insight: insight)
+            }
+        }
+        .onChange(of: displayMode) { _, mode in
+            if mode == .overlay { skeletonEnabled = true }
+        }
+        .onChange(of: position.sectionIndex) { _, _ in
+            isPlaying = false
+            position.offset = 0
+        }
+        .onAppear { clampPosition(to: processed) }
     }
 
-    @ViewBuilder
-    private func footer(_ processed: ProcessedSession) -> some View {
-        VStack(spacing: 8) {
+    private var header: some View {
+        VStack(spacing: 18) {
             HStack {
-                NavigationLink("Moves") { SectionListView(jumpTo: { jump(processed, toMove: $0) }) }
-                NavigationLink("Raw metrics") { RawMetricsView() }
-                NavigationLink("Route") { RouteCorrectionView() }
-                NavigationLink("Tuning") { TuningPanelView() }
-                // Stage timings, statuses and warnings. The run no longer has a
-                // screen of its own, so this is where it lives.
-                NavigationLink("Report", value: AppRoute.report)
-            }
-            .buttonStyle(.bordered)
-            .font(.footnote)
-
-            HStack {
-                Button("\(processed.warnings.count) warnings") { showWarnings = true }
-                    .font(.caption)
-                    .disabled(processed.warnings.isEmpty)
                 Spacer()
-                // Instrumentation for task 2.9: this number must not change
-                // when the mode picker changes.
-                Text("pipeline runs: \(model.pipelineRunCount) · \(processed.analyses.first?.source ?? "—")\(model.processingTimeSummary.map { " · \($0)" } ?? "")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Button(action: closeResults) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundStyle(ResultsStyle.secondaryText)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Return to clips")
             }
-            .padding(.horizontal)
-        }
-    }
 
-    @ViewBuilder
-    private func warningsSheet(_ processed: ProcessedSession) -> some View {
-        NavigationStack {
-            List(Array(processed.warnings.enumerated()), id: \.offset) { _, warning in
-                Text(warning).font(.callout)
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    ForEach(ResultsDisplayMode.allCases) { mode in
+                        Button {
+                            displayMode = mode
+                        } label: {
+                            Text(mode.rawValue)
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(
+                                    displayMode == mode
+                                        ? Color.black
+                                        : ResultsStyle.secondaryText
+                                )
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(
+                                    displayMode == mode ? Color.white : Color.clear,
+                                    in: .rect(cornerRadius: ResultsStyle.controlCornerRadius - 3)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(displayMode == mode ? .isSelected : [])
+                    }
+                }
+                .padding(4)
+                .background(
+                    ResultsStyle.controlSurface,
+                    in: .rect(cornerRadius: ResultsStyle.controlCornerRadius + 2)
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Video display")
+
+                Button {
+                    guard displayMode == .sideBySide else { return }
+                    skeletonEnabled.toggle()
+                } label: {
+                    Image(systemName: "skew")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(
+                            skeletonIsActive
+                                ? Color.black
+                                : ResultsStyle.secondaryText
+                        )
+                        .frame(width: 58, height: 52)
+                        .background(
+                            skeletonIsActive ? Color.white : ResultsStyle.controlSurface,
+                            in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
+                        )
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(displayMode == .sideBySide)
+                .accessibilityLabel("Skeleton comparison")
+                .accessibilityValue(skeletonIsActive ? "On" : "Off")
+
+                Menu {
+                    Toggle("Centre of mass", isOn: $overlays.centreOfMass)
+                    Toggle("Base of support", isOn: $overlays.baseOfSupport)
+                    Toggle("Limb load", isOn: $overlays.limbLoad)
+                    Toggle("Pelvis triangle", isOn: $overlays.pelvisTriangle)
+                    Toggle("Plumb line", isOn: $overlays.plumbLine)
+                    Toggle("Knee over toe", isOn: $overlays.kneeLine)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 46, height: 52)
+                        .background(
+                            ResultsStyle.controlSurface,
+                            in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
+                        )
+                }
+                .accessibilityLabel("Overlay options")
             }
-            .navigationTitle("Warnings")
         }
+        .padding(.top, 6)
     }
-
-    // MARK: Comparison surfaces
 
     @ViewBuilder
     private func comparison(_ processed: ProcessedSession) -> some View {
         let frames = resolvedFrames(processed)
-        switch mode {
-        case .skeletonOnly:
-            SkeletonCanvas(
-                referenceFrame: processed.referencePose.frame(at: frames.reference),
-                attemptFrame: frames.attempt.flatMap { processed.attemptPose.frame(at: $0) },
-                referenceMetrics: processed.referenceMetrics.frame(at: frames.reference),
-                attemptMetrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
-                referenceScale: processed.referenceScale,
-                attemptScale: processed.attemptScale,
-                route: processed.route,
-                overlays: overlays,
-                wallPlate: processed.wallPlate?.image
-            )
+
+        switch displayMode {
+        case .overlay:
+            GeometryReader { geometry in
+                SkeletonCanvas(
+                    referenceFrame: processed.referencePose.frame(at: frames.reference),
+                    attemptFrame: frames.attempt.flatMap { processed.attemptPose.frame(at: $0) },
+                    referenceMetrics: processed.referenceMetrics.frame(at: frames.reference),
+                    attemptMetrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
+                    referenceScale: processed.referenceScale,
+                    attemptScale: processed.attemptScale,
+                    route: processed.route,
+                    overlays: overlays,
+                    // Overlay is spatial evidence, so retain each climber's tracked
+                    // size instead of normalizing both bodies to one torso length.
+                    normalizeBodyLength: false,
+                    // The card supplies the dark fallback around a missing wall
+                    // plate; do not paint the diagnostic canvas's gray fill.
+                    drawsBackground: false,
+                    wallPlate: processed.wallPlate?.image
+                )
+                // Keep the wall image at exactly one Side by Side pane's size,
+                // then center that single comparison pane in the full row.
+                .frame(width: max(0, (geometry.size.width - 4) / 2), height: geometry.size.height)
+                .background(ResultsStyle.panelSurface)
+                .clipShape(.rect(cornerRadius: ResultsStyle.paneCornerRadius))
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ResultsStyle.paneCornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+
         case .sideBySide:
             HStack(spacing: 4) {
-                ClimberPane(
-                    title: "Reference",
-                    video: processed.session.reference,
-                    pose: processed.referencePose,
-                    frameIndex: frames.reference,
-                    scrubbing: isScrubbing,
-                    cache: frameCache
-                )
-                ClimberPane(
-                    title: processed.attempt?.label ?? "Attempt",
-                    video: processed.attempt,
-                    pose: processed.attemptPose,
-                    frameIndex: frames.attempt,
-                    scrubbing: isScrubbing,
-                    cache: frameCache,
-                    unavailableReason: currentSequence(processed)?.attemptReached == false
-                        ? "no footage for this sequence"
-                        : "not reached"
-                )
-            }
-        case .skeletonOverlay:
-            HStack(spacing: 4) {
-                SkeletonOverlayPane(
-                    title: "Reference",
-                    video: processed.session.reference,
-                    pose: processed.referencePose,
-                    frameIndex: frames.reference,
-                    metrics: processed.referenceMetrics.frame(at: frames.reference),
-                    scale: processed.referenceScale,
-                    colour: .green,
-                    // Wall space is the reference's own image space.
-                    transform: nil,
-                    overlays: overlays,
-                    scrubbing: isScrubbing,
-                    cache: frameCache
-                )
-                SkeletonOverlayPane(
-                    title: processed.attempt?.label ?? "Attempt",
-                    video: processed.attempt,
-                    pose: processed.attemptPose,
-                    frameIndex: frames.attempt,
-                    metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
-                    scale: processed.attemptScale,
-                    colour: .orange,
-                    // The attempt's pose was warped into wall space; put it back
-                    // into its own frame before drawing it on its own video.
-                    transform: processed.alignment.homography.inverted,
-                    overlays: overlays,
-                    scrubbing: isScrubbing,
-                    cache: frameCache,
-                    unavailableReason: currentSequence(processed)?.attemptReached == false
-                        ? "no footage for this sequence"
-                        : "not reached"
-                )
+                if skeletonEnabled {
+                    SkeletonOverlayPane(
+                        title: "Reference",
+                        video: processed.session.reference,
+                        pose: processed.referencePose,
+                        frameIndex: frames.reference,
+                        metrics: processed.referenceMetrics.frame(at: frames.reference),
+                        scale: processed.referenceScale,
+                        colour: .green,
+                        transform: nil,
+                        overlays: overlays,
+                        scrubbing: isScrubbing,
+                        cache: frameCache,
+                        badgeLabel: "REF"
+                    )
+                    SkeletonOverlayPane(
+                        title: processed.attempt?.label.nonEmpty ?? "You",
+                        video: processed.attempt,
+                        pose: processed.attemptPose,
+                        frameIndex: frames.attempt,
+                        metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
+                        scale: processed.attemptScale,
+                        colour: .orange,
+                        transform: processed.alignment.homography.inverted,
+                        overlays: overlays,
+                        scrubbing: isScrubbing,
+                        cache: frameCache,
+                        badgeLabel: "YOU",
+                        unavailableReason: "Not reached"
+                    )
+                } else {
+                    ComparisonVideoPane(
+                        title: "Reference",
+                        video: processed.session.reference,
+                        pose: processed.referencePose,
+                        frameIndex: frames.reference,
+                        scrubbing: isScrubbing,
+                        cache: frameCache,
+                        badgeLabel: "REF",
+                        showsPreviewArtwork: showsPreviewArtwork
+                    )
+                    ComparisonVideoPane(
+                        title: processed.attempt?.label.nonEmpty ?? "You",
+                        video: processed.attempt,
+                        pose: processed.attemptPose,
+                        frameIndex: frames.attempt,
+                        scrubbing: isScrubbing,
+                        cache: frameCache,
+                        badgeLabel: "YOU",
+                        showsPreviewArtwork: showsPreviewArtwork,
+                        unavailableReason: "Not reached"
+                    )
+                }
             }
         }
     }
 
-    /// Reference frame from the scrub position, attempt frame from the DTW
-    /// path. Same *move*, never same timestamp.
-    private func resolvedFrames(_ processed: ProcessedSession) -> (reference: Int, attempt: Int?) {
+    private func sequencePicker(_ processed: ProcessedSession) -> some View {
         let sequences = processed.sequences.sequences
-        guard sequences.indices.contains(position.sectionIndex) else { return (0, nil) }
-        let sequence = sequences[position.sectionIndex]
-        let referenceFrame = frame(in: sequence.referenceRange, offset: position.offset)
 
-        if syncLocked {
-            let path = processed.sequenceWarpPaths.first { $0.sectionIndex == sequence.index }
-            return (referenceFrame, path?.attemptFrame(forReference: referenceFrame))
+        return HStack(spacing: 8) {
+            Button { selectSequence(position.sectionIndex - 1, processed: processed) } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 28, height: 48)
+            }
+            .buttonStyle(.plain)
+            .disabled(position.sectionIndex == 0)
+
+            GeometryReader { geometry in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(sequences) { sequence in
+                            let selected = sequence.index == position.sectionIndex
+                            let containsFall = sequenceContainsFall(sequence, processed: processed)
+                            let hasDifferentMoveCount = sequence.moveCountDelta != 0
+
+                            Button {
+                                selectSequence(sequence.index, processed: processed)
+                            } label: {
+                                ZStack(alignment: .topTrailing) {
+                                    Text("\(sequence.index + 1)")
+                                        .font(.system(
+                                            size: 17,
+                                            weight: selected ? .bold : .regular,
+                                            design: .monospaced
+                                        ))
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                                    if containsFall {
+                                        Text("F")
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .padding(6)
+                                    }
+                                }
+                                .foregroundStyle(sequenceForeground(
+                                    selected: selected,
+                                    containsFall: containsFall,
+                                    hasDifferentMoveCount: hasDifferentMoveCount
+                                ))
+                                .frame(width: 52, height: 48)
+                                .background(
+                                    sequenceBackground(
+                                        selected: selected,
+                                        containsFall: containsFall,
+                                        hasDifferentMoveCount: hasDifferentMoveCount
+                                    ),
+                                    in: .rect(cornerRadius: 15)
+                                )
+                                .scaleEffect(selected ? 1.12 : 1)
+                                .animation(.snappy(duration: 0.2), value: selected)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Sequence \(sequence.index + 1) of \(sequences.count)")
+                            .accessibilityValue(sequenceAccessibilityValue(
+                                containsFall: containsFall,
+                                hasDifferentMoveCount: hasDifferentMoveCount
+                            ))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                        }
+                    }
+                    // Center short lists instead of pinning them to the leading
+                    // edge. Longer lists retain their intrinsic width and scroll.
+                    .frame(minWidth: geometry.size.width, minHeight: 60, alignment: .center)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .frame(height: 60)
+
+            Button { selectSequence(position.sectionIndex + 1, processed: processed) } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 28, height: 48)
+            }
+            .buttonStyle(.plain)
+            .disabled(position.sectionIndex >= sequences.count - 1)
         }
-        // Unlocked: the attempt pane scrubs on its own clock. The escape hatch
-        // exists because DTW will sometimes misalign a sequence, and locked
-        // mode makes that failure impossible to inspect.
-        guard sequence.attemptReached else { return (referenceFrame, nil) }
-        return (referenceFrame, frame(in: sequence.attemptRange, offset: attemptOffsetOverride ?? position.offset))
     }
 
-    /// The sequence the scrubber is currently on.
+    private var playbackControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                if position.offset >= 1 { position.offset = 0 }
+                isPlaying.toggle()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 24, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isPlaying ? "Pause" : "Play")
+
+            Slider(value: $position.offset, in: 0 ... 1) { editing in
+                isScrubbing = editing
+                if editing { isPlaying = false }
+            }
+            .tint(.white)
+        }
+    }
+
+    private func insightCard(_ processed: ProcessedSession) -> some View {
+        let insight = currentInsight(processed)
+        let count = processed.sequences.sequences.count
+
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Sequence")
+                    .font(.system(size: 17, weight: .regular, design: .monospaced))
+                    .foregroundStyle(ResultsStyle.secondaryText)
+
+                Text("\(position.sectionIndex + 1) of \(count)")
+                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 13)
+                    .frame(minHeight: 34)
+                    .background(.white, in: .capsule)
+
+                Spacer()
+                Text(durationLabel(processed))
+                    .font(.system(size: 16, weight: .regular, design: .monospaced))
+                    .foregroundStyle(ResultsStyle.secondaryText)
+                    .multilineTextAlignment(.trailing)
+            }
+
+            if let insight {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(sentence(insight.observation))
+                        .foregroundStyle(.white)
+                    if let cause = insight.cause, !cause.isEmpty {
+                        Text(sentence(cause, capitalizing: true))
+                            .foregroundStyle(AppTheme.accent)
+                            .fontWeight(.semibold)
+                    }
+                }
+                .font(.system(size: 23, weight: .regular))
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .background(
+            ResultsStyle.panelSurface,
+            in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
+        )
+    }
+
+    private func numbersButton(_ processed: ProcessedSession) -> some View {
+        let insight = currentInsight(processed)
+        let canExplainState = insight != nil
+
+        return Button { showNumbers = true } label: {
+            HStack {
+                Text("Detailed Analytics")
+                    .font(.system(size: 18, weight: .regular, design: .monospaced))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .foregroundStyle(
+                canExplainState
+                    ? ResultsStyle.secondaryText
+                    : Color.secondary
+            )
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, minHeight: 78)
+            .background(
+                ResultsStyle.panelSurface,
+                in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
+            )
+        }
+        .buttonStyle(.plain)
+        // The sheet owns both the metric list and its empty explanation. Keep
+        // this tappable when an analysis exists so low-confidence tracking does
+        // not look like a broken control with no way to learn what happened.
+        .disabled(!canExplainState)
+    }
+
+    private var unavailableState: some View {
+        ContentUnavailableView {
+            Label("No results yet", systemImage: "figure.climbing")
+        } description: {
+            Text("Process both clips before opening the comparison.")
+        } actions: {
+            Button("Return to clips", action: closeResults)
+                .tint(AppTheme.accent)
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var skeletonIsActive: Bool {
+        displayMode == .overlay || skeletonEnabled
+    }
+
+    private func sequenceContainsFall(_ sequence: ClimbSequence, processed: ProcessedSession) -> Bool {
+        guard let fallIndex = processed.fallReport.fallSectionIndex else { return false }
+        return sequence.referenceMoves.contains(fallIndex)
+    }
+
+    private func sequenceBackground(
+        selected: Bool,
+        containsFall: Bool,
+        hasDifferentMoveCount: Bool
+    ) -> Color {
+        if containsFall { return .red }
+        if selected || hasDifferentMoveCount { return AppTheme.accent }
+        return ResultsStyle.panelSurface
+    }
+
+    private func sequenceForeground(
+        selected: Bool,
+        containsFall: Bool,
+        hasDifferentMoveCount: Bool
+    ) -> Color {
+        if containsFall { return .white }
+        if selected || hasDifferentMoveCount { return AppTheme.background }
+        return ResultsStyle.secondaryText
+    }
+
+    private func sequenceAccessibilityValue(
+        containsFall: Bool,
+        hasDifferentMoveCount: Bool
+    ) -> String {
+        var states: [String] = []
+        if containsFall { states.append("Fall detected in this sequence") }
+        if hasDifferentMoveCount { states.append("Different number of moves") }
+        return states.joined(separator: ", ")
+    }
+
+    private func sentence(_ value: String, capitalizing: Bool = false) -> String {
+        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!?"))
+        if capitalizing, let first = text.first {
+            text = first.uppercased() + String(text.dropFirst())
+        }
+        return text + "."
+    }
+
+    private func currentInsight(_ processed: ProcessedSession) -> SequenceAnalysis? {
+        guard let sequence = currentSequence(processed) else { return nil }
+        return processed.analysis(forSequence: sequence.index)
+    }
+
+    private func resolvedFrames(_ processed: ProcessedSession) -> (reference: Int, attempt: Int?) {
+        guard let sequence = currentSequence(processed) else { return (0, nil) }
+        let referenceFrame = frame(in: sequence.referenceRange, offset: position.offset)
+        let path = processed.sequenceWarpPaths.first { $0.sectionIndex == sequence.index }
+        return (referenceFrame, path?.attemptFrame(forReference: referenceFrame))
+    }
+
     private func currentSequence(_ processed: ProcessedSession) -> ClimbSequence? {
         let sequences = processed.sequences.sequences
         guard sequences.indices.contains(position.sectionIndex) else { return nil }
@@ -260,469 +539,84 @@ struct ResultsView: View {
 
     private func frame(in range: Range<Int>, offset: Double) -> Int {
         guard !range.isEmpty else { return range.lowerBound }
-        let span = Double(range.count - 1)
-        return range.lowerBound + Int((span * offset.clamped(to: 0 ... 1)).rounded())
+        return range.lowerBound + Int(
+            (Double(range.count - 1) * offset.clamped(to: 0 ... 1)).rounded()
+        )
     }
 
-    // MARK: Panels
+    private func selectSequence(_ index: Int, processed: ProcessedSession) {
+        let upper = max(0, processed.sequences.sequences.count - 1)
+        position = MovePosition(sectionIndex: index.clamped(to: 0 ... upper), offset: 0)
+        isPlaying = false
+    }
 
-    /// The long form of the abbreviations in the scrubber label. It lives here,
-    /// in a panel that scrolls, rather than under the video where it wrapped to
-    /// three lines — and every line under the video is a line of climber.
-    private func sequenceExplanation(_ processed: ProcessedSession) -> String? {
-        guard let sequence = currentSequence(processed) else { return nil }
-        var parts: [String] = []
-        let refMoves = sequence.referenceMoves.count
-        let attMoves = sequence.attemptMoves.count
-        if refMoves != attMoves {
-            parts.append("\(refMoves) move\(refMoves == 1 ? "" : "s") for them against \(attMoves) for you")
+    private func clampPosition(to processed: ProcessedSession) {
+        let upper = max(0, processed.sequences.sequences.count - 1)
+        position.sectionIndex = position.sectionIndex.clamped(to: 0 ... upper)
+        position.offset = position.offset.clamped(to: 0 ... 1)
+    }
+
+    private func comparisonHeight(for size: CGSize, processed: ProcessedSession) -> CGFloat {
+        // Both display modes use one Side by Side pane's dimensions. Overlay
+        // presents that same-size surface centered in the full comparison row.
+        let availableWidth = max(0, size.width - 36)
+        let paneWidth = max(0, (availableWidth - 4) / 2)
+        let sourceAspect = CGFloat(processed.referencePose.xScale)
+        guard sourceAspect.isFinite, sourceAspect > 0 else {
+            return min(430, max(320, size.height * 0.43))
         }
-        if sequence.toAnchorID < 0 {
-            parts.append("everything after hold \(sequence.fromAnchorID), the last hold you both used — anchored at one end only, so nothing in it is compared")
-        }
-        if !sequence.attemptReached { parts.append("no attempt footage in this span") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return paneWidth / sourceAspect
     }
 
-    @ViewBuilder
-    private func currentAnalysis(_ processed: ProcessedSession) -> some View {
-        Group {
-            VStack(alignment: .leading, spacing: 6) {
-                if let explanation = sequenceExplanation(processed) {
-                    Text(explanation).font(.caption).foregroundStyle(.secondary)
-                }
-                let moveIndices = currentSequence(processed).map { Array($0.referenceMoves) } ?? []
-                // **Where you fell and where it started are different claims.**
-                //
-                // Cross-sequence attribution is the point of the feature, so the
-                // fall report deliberately appears on the earlier sequence too —
-                // but it showed the same red "You came off on move 5" headline
-                // there, which reads as the fall having happened on whichever
-                // sequence you are standing on. Same report, two sequences, and
-                // no way to tell which one you were looking at.
-                if let fall = processed.fallAnalysis {
-                    let here = moveIndices.contains(fall.sectionIndex)
-                    let startedHere = moveIndices.contains(processed.fallReport.distalSectionIndex ?? -1)
-                    if here || startedHere {
-                        Text(here ? fall.headline : distalHeadline(processed))
-                            .font(.headline)
-                            .foregroundStyle(here ? .red : .orange)
-                        ForEach(fall.observations) { AnalysisNoteRow(note: $0) }
-                        Button(here ? "Show me why" : "Take me to the fall") { drillIntoFall(processed) }
-                            .font(.caption)
-                    }
-                }
-                // A sequence can hold more than one of the reference's moves,
-                // so it shows all of their analyses rather than picking one.
-                // Metrics are still measured per move; only the comparison and
-                // the scrubbing happen per sequence.
-                ForEach(moveIndices, id: \.self) { index in
-                    if let analysis = processed.analysis(forSection: index) {
-                        Text(analysis.headline).font(.headline)
-                        ForEach(analysis.observations) { AnalysisNoteRow(note: $0) }
-                        if let drill = analysis.drill {
-                            Text("Try: \(drill)").font(.callout).foregroundStyle(.secondary)
-                        }
-                        ForEach(analysis.warnings, id: \.self) {
-                            Text($0).font(.caption2).foregroundStyle(.orange)
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal)
-        }
-        // No fixed height and no scroll view of its own: the text flows to its
-        // full length and the page carries it. Nothing here is clipped, so
-        // there is no hidden content to discover by scrolling the right third
-        // of the screen.
+    private func durationLabel(_ processed: ProcessedSession) -> String {
+        guard let sequence = currentSequence(processed) else { return "—" }
+        return clock(duration(of: sequence.referenceRange, in: processed.referencePose))
     }
 
-    /// Shown on the sequence where the earliest contributing signal fired, which
-    /// is not the sequence the climber came off on.
-    private func distalHeadline(_ processed: ProcessedSession) -> String {
-        let fell = (processed.fallReport.fallSectionIndex ?? 0) + 1
-        return "This is where the fall started — you came off later, on move \(fell)."
+    private func duration(of range: Range<Int>, in pose: PoseSequence) -> Double {
+        guard !range.isEmpty,
+              let start = pose.frame(at: range.lowerBound)?.timeSeconds,
+              let end = pose.frame(at: range.upperBound - 1)?.timeSeconds
+        else { return 0 }
+        return max(0, end - start)
     }
 
-    @ViewBuilder
-    private func errorPanel(_ processed: ProcessedSession) -> some View {
-        List {
-            SwiftUI.Section("No moves could be derived") {
-                Text("The pipeline ran but produced no moves, so there is nothing to compare. What it did find:")
-                    .font(.callout)
-                LabeledContent("Reference contacts", value: "\(processed.referenceContacts.count)")
-                LabeledContent("Attempt contacts", value: "\(processed.attemptContacts.count)")
-                LabeledContent("Holds", value: "\(processed.route.holds.count)")
-                LabeledContent("Hand holds", value: "\(processed.route.handHolds.count)")
-                LabeledContent("Registration", value: processed.alignment.succeeded ? "ok" : "failed")
-            }
-            SwiftUI.Section("Warnings") {
-                ForEach(Array(processed.warnings.enumerated()), id: \.offset) { _, warning in
-                    Text(warning).font(.caption)
-                }
-            }
-            SwiftUI.Section {
-                NavigationLink("Open tuning") { TuningPanelView() }
-                NavigationLink("Correct the route by hand") { RouteCorrectionView() }
+    private func clock(_ seconds: Double) -> String {
+        let whole = max(0, Int(seconds.rounded(.down)))
+        return String(format: "%02d:%02d", whole / 60, whole % 60)
+    }
+
+    @MainActor
+    private func runPlayback() async {
+        guard isPlaying else { return }
+
+        while isPlaying && !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(125))
+            guard !Task.isCancelled, let processed = model.processed,
+                  let sequence = currentSequence(processed)
+            else { return }
+
+            let seconds = max(0.1, duration(of: sequence.referenceRange, in: processed.referencePose))
+            let next = position.offset + Self.playbackStep / seconds
+            if next >= 1 {
+                position.offset = 1
+                isPlaying = false
+            } else {
+                position.offset = next
             }
         }
     }
 
-    /// Jump to the sequence containing a given reference **move**.
-    ///
-    /// Callers hold move indices — the fall report names a move, and the
-    /// section list is per move — while the scrubber is indexed by sequence, so
-    /// the translation lives here rather than at each call site.
-    private func jump(_ processed: ProcessedSession, toMove moveIndex: Int) {
-        let sequences = processed.sequences.sequences
-        let target = sequences.firstIndex { $0.referenceMoves.contains(moveIndex) }
-            ?? min(moveIndex, max(0, sequences.count - 1))
-        position = MovePosition(sectionIndex: target, offset: 0)
-    }
-
-    /// Task 5.5 — tapping a fall finding lands on the frame where the COM
-    /// leaves the base of support, in skeleton mode with the overlay on.
-    private func drillIntoFall(_ processed: ProcessedSession) {
-        mode = .skeletonOnly
-        overlays.centreOfMass = true
-        overlays.baseOfSupport = true
-        guard let signal = processed.fallReport.mechanical.first(where: { $0.kind == .comOutsideBaseOfSupport })
-                ?? processed.fallReport.mechanical.first,
-              let frameIndex = signal.frameIndex,
-              let section = processed.sections.first(where: { $0.attemptRange.contains(frameIndex) })
-        else {
-            if let index = processed.fallReport.fallSectionIndex { jump(processed, toMove: index) }
-            return
-        }
-        // The frame is an attempt frame; walk the DTW path back to a reference
-        // frame so the scrubber lands on the same move.
-        let sequences = processed.sequences.sequences
-        guard let sequenceIndex = sequences.firstIndex(where: { $0.referenceMoves.contains(section.index) }) else {
-            jump(processed, toMove: section.index)
-            return
-        }
-        let span = sequences[sequenceIndex].attemptRange
-        let offset = span.count > 1
-            ? Double(frameIndex - span.lowerBound) / Double(span.count - 1)
-            : 0
-        position = MovePosition(sectionIndex: sequenceIndex, offset: offset.clamped(to: 0 ... 1))
-    }
-}
-
-/// Task 6.4/6.9 — the claim is what you read; the measurement is one tap away.
-///
-/// Numbers were removed from the prose, not from the app. Hiding them would
-/// make the analysis unauditable, which is the opposite of the intent.
-struct AnalysisNoteRow: View {
-    let note: AnalysisNote
-    @State private var showEvidence = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .top, spacing: 4) {
-                Text(note.text).font(.callout)
-                Image(systemName: showEvidence ? "chevron.down" : "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { showEvidence.toggle() }
-
-            if showEvidence {
-                Text(note.evidence)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - Scrubber
-
-/// Task 2.8b — position is move N of M plus a continuous offset within the
-/// move. It reads correctly on a pair where one climber took 3× longer.
-struct MoveScrubber: View {
-    let processed: ProcessedSession
-    @Binding var position: MovePosition
-    @Binding var syncLocked: Bool
-    @Binding var attemptOffsetOverride: Double?
-    /// Raised while a finger is down, so the panes can decode keyframes for the
-    /// duration of the drag and the real frame once it lands.
-    @Binding var isScrubbing: Bool
-
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Button {
-                    position = MovePosition(sectionIndex: max(0, position.sectionIndex - 1), offset: 0)
-                } label: { Image(systemName: "chevron.left") }
-                .disabled(position.sectionIndex == 0)
-
-                Text(label)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .frame(maxWidth: .infinity)
-
-                Button {
-                    position = MovePosition(
-                        sectionIndex: min(processed.sequences.sequences.count - 1, position.sectionIndex + 1),
-                        offset: 0
-                    )
-                } label: { Image(systemName: "chevron.right") }
-                .disabled(position.sectionIndex >= processed.sequences.sequences.count - 1)
-            }
-
-            Slider(value: $position.offset, in: 0 ... 1) { editing in isScrubbing = editing }
-
-            // One marker per sequence, widthed by how many reference moves it
-            // holds, so a sequence covering two moves is visibly wider than one
-            // covering a single move.
-            //
-            // **Widths are computed, not expressed as layout priority.** The
-            // first version used `.layoutPriority(moveCount)`, which is not a
-            // weight — an HStack hands the space to the highest priority first,
-            // so the six-move sequence took the whole row and the other two
-            // collapsed to nothing. On gym-testing/test1 that rendered as a
-            // single red bar with the fall marker in the middle, which reads as
-            // "every sequence is the fall".
-            GeometryReader { geometry in
-                let sequences = processed.sequences.sequences
-                let weights = sequences.map { Double(max(1, $0.referenceMoves.count)) }
-                let total = max(1, weights.reduce(0, +))
-                let gaps = Double(max(0, sequences.count - 1)) * 2
-                let available = max(0, geometry.size.width - gaps)
-                HStack(spacing: 2) {
-                    ForEach(Array(zip(sequences, weights)), id: \.0.id) { sequence, weight in
-                        Rectangle()
-                            .fill(colour(for: sequence))
-                            .frame(width: max(3, available * weight / total), height: 10)
-                            .overlay {
-                                if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) {
-                                    Text("F").font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
-                                }
-                                // A differing move count shows as the orange bar
-                                // and is spelled out in the label above. It was
-                                // also printed into the marker as "1v2", which
-                                // at 7pt inside a 10pt bar, repeated across
-                                // every sequence, was unreadable clutter rather
-                                // than a finding.
-                            }
-                            .onTapGesture {
-                                position = MovePosition(sectionIndex: sequence.index, offset: 0)
-                            }
-                    }
-                }
-                .frame(width: geometry.size.width, alignment: .leading)
-            }
-            .frame(height: 10)
-
-            Toggle("Sync locked to the reference's sequence", isOn: $syncLocked)
-                .font(.caption)
-                .lineLimit(1)
-                .onChange(of: syncLocked) { _, locked in
-                    attemptOffsetOverride = locked ? nil : position.offset
-                }
-            if !syncLocked {
-                Slider(
-                    value: Binding(
-                        get: { attemptOffsetOverride ?? position.offset },
-                        set: { attemptOffsetOverride = $0 }
-                    ),
-                    in: 0 ... 1
-                ) { editing in isScrubbing = editing }
-                Text("Attempt pane detached — scrubbing on its own clock.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// One line, because it sits directly under the video and every line it
-    /// wraps to is a line of climber taken off the screen. The long forms of
-    /// these clauses moved into the analysis panel, which is scrollable.
-    private var label: String {
-        let sequences = processed.sequences.sequences
-        guard sequences.indices.contains(position.sectionIndex) else { return "no sequences" }
-        let sequence = sequences[position.sectionIndex]
-        var text = "Seq \(position.sectionIndex + 1)/\(sequences.count)  \(Int(position.offset * 100))%"
-        // Move counts per climber, which is the finding this layer exists to
-        // surface: three moves against one is not a mismatch, it is the
-        // difference worth reporting.
-        let refMoves = sequence.referenceMoves.count
-        let attMoves = sequence.attemptMoves.count
-        if refMoves != attMoves { text += "  \(refMoves)v\(attMoves)" }
-        if !sequence.attemptReached { text += "  no footage" }
-        // The tail has one anchor, not two. Saying so is the difference between
-        // "the app compared these and found nothing" and "there is nothing here
-        // that can be compared" — and the fall lives in this span.
-        if sequence.toAnchorID < 0 { text += "  tail" }
-        // Truncation is a claim about the climber coming off, so it is read
-        // from the moves inside this sequence rather than assumed from the
-        // sequence itself.
-        if moves(of: sequence).contains(where: { $0.divergence?.kind == .truncated }) {
-            text += "  came off"
-        }
-        return text
-    }
-
-
-    /// The reference's own moves inside a sequence.
-    private func moves(of sequence: ClimbSequence) -> [Section] {
-        sequence.referenceMoves
-            .filter { processed.sections.indices.contains($0) }
-            .map { processed.sections[$0] }
-    }
-
-    private func colour(for sequence: ClimbSequence) -> Color {
-        if moves(of: sequence).contains(where: { processed.fallReport.fallSectionIndex == $0.index }) { return .red }
-        if sequence.moveCountDelta != 0 { return .orange }
-        if !sequence.attemptReached { return .gray }
-        return sequence.index == position.sectionIndex ? .blue : .blue.opacity(0.35)
-    }
-}
-
-struct OverlayToggles: View {
-    @Binding var overlays: AnalyticalOverlays
-    /// Divergence vectors join the two climbers' joints, which only means
-    /// something on one shared diagram. In skeleton-overlay mode each climber
-    /// is on their own footage, so there is no line to draw between them.
-    var showsDivergence = true
-    /// Off when there is no plate to show — a toggle for a picture that does
-    /// not exist reads as a broken toggle. The stage report says why it is
-    /// missing.
-    var showsBackdrop = true
-
-    var body: some View {
-        ViewThatFits {
-            HStack {
-                Toggle("COM", isOn: $overlays.centreOfMass)
-                Toggle("BOS", isOn: $overlays.baseOfSupport)
-                Toggle("Load", isOn: $overlays.limbLoad)
-                Toggle("Hips", isOn: $overlays.pelvisTriangle)
-                Toggle("Plumb", isOn: $overlays.plumbLine)
-                Toggle("Knees", isOn: $overlays.kneeLine)
-                if showsDivergence { Toggle("Diff", isOn: $overlays.divergenceVectors) }
-                if showsBackdrop { Toggle("Wall", isOn: $overlays.wallBackdrop) }
-            }
-            .toggleStyle(.button)
-            .font(.caption)
-
-            VStack(alignment: .leading) {
-                Toggle("Centre of mass", isOn: $overlays.centreOfMass)
-                Toggle("Base of support", isOn: $overlays.baseOfSupport)
-                Toggle("Limb load", isOn: $overlays.limbLoad)
-                Toggle("Pelvis triangle", isOn: $overlays.pelvisTriangle)
-                Toggle("Plumb line", isOn: $overlays.plumbLine)
-                Toggle("Knee over toe", isOn: $overlays.kneeLine)
-                if showsDivergence { Toggle("Divergence", isOn: $overlays.divergenceVectors) }
-                if showsBackdrop { Toggle("Wall backdrop", isOn: $overlays.wallBackdrop) }
-            }
-            .font(.caption)
-        }
-
-        if showsBackdrop, overlays.wallBackdrop {
-            HStack {
-                Text("Wash").font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $overlays.wallWash, in: 0 ... 1)
-                Text(String(format: "%.0f%%", overlays.wallWash * 100))
-                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-            }
-        }
-
-        // A three-state marker nobody can read is a two-state marker plus
-        // confusion. The key costs one line and answers the question at the
-        // point it gets asked.
-        if overlays.pelvisTriangle || overlays.plumbLine {
-            Text("Pelvis triangle = hips + pubic bone · yellow = your line, white dashed = vertical")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-
-        if overlays.centreOfMass {
-            Text("COM  filled = inside BOS · red = outside · white dashed = no polygon")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+    private func closeResults() {
+        isPlaying = false
+        if let setupIndex = model.path.lastIndex(of: .setup) {
+            model.path = Array(model.path.prefix(setupIndex + 1))
+        } else {
+            model.path.removeAll()
         }
     }
 }
 
-// MARK: - Panes
-
-struct ClimberPane: View {
-    @Environment(AppModel.self) private var model
-    let title: String
-    let video: VideoRef?
-    /// Only for the frame timestamp — the pane draws video, nothing derived.
-    let pose: PoseSequence
-    let frameIndex: Int?
-    /// True while a finger is on the scrubber. Decodes land on keyframes for
-    /// the duration of a drag and on the exact frame once it ends.
-    let scrubbing: Bool
-    /// Shared with every other pane on the screen, so a mode switch does not
-    /// start from a cold cache.
-    let cache: FrameImageCache
-    /// Why there is no frame, when there isn't one. "Not reached" and
-    /// "different order" are opposite claims about the climber, and the pane
-    /// used to assert the first for both.
-    var unavailableReason: String = "not reached"
-
-    @State private var frames = VideoFrameLoader()
-    @State private var url: URL?
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-            ZStack {
-                if let image = frames.image {
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    Rectangle().fill(Color(.secondarySystemFill))
-                        .overlay { Text("no frame").font(.caption2).foregroundStyle(.secondary) }
-                }
-                // A decode that failed is a different thing from a frame that
-                // does not exist, and saying which is the difference between
-                // "the pipeline found nothing here" and "the scrubber outran
-                // the decoder". The last good frame stays on screen underneath.
-                if let decodeFailure = frames.decodeFailure {
-                    VStack {
-                        Spacer()
-                        Text(decodeFailure)
-                            .font(.caption2)
-                            .padding(4)
-                            .background(.thinMaterial)
-                    }
-                }
-                // No skeleton here. This pane is for watching the climb; the
-                // skeleton over footage is its own mode, where one skeleton
-                // sits on one climber in its own pane. Drawing it here as well
-                // would put line art over a picture that is already legible.
-                if frameIndex == nil {
-                    Text(unavailableReason)
-                        .font(.caption)
-                        .padding(4)
-                        .background(.thinMaterial)
-                }
-            }
-        }
-        .task(id: video?.id) {
-            guard let video else { url = nil; return }
-            url = await model.videoURL(video)
-        }
-        .task(id: FrameRequest(url: url, frameIndex: frameIndex, scrubbing: scrubbing)) {
-            await frames.load(
-                url: url,
-                frameIndex: frameIndex,
-                timeSeconds: frameIndex.flatMap { pose.frame(at: $0)?.timeSeconds },
-                scrubbing: scrubbing,
-                cache: cache
-            )
-        }
-    }
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

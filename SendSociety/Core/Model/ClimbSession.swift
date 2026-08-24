@@ -1,5 +1,33 @@
 import Foundation
 
+/// Gravity measured in the phone's coordinate system when an in-app recording
+/// actually begins. Unlike a Core Motion attitude quaternion, gravity remains
+/// comparable after the capture screen has been dismissed and a new motion
+/// session starts for the other climber.
+public struct CaptureOrientation: Sendable, Codable, Hashable {
+    public var gravityX: Double
+    public var gravityY: Double
+    public var gravityZ: Double
+
+    public init(gravityX: Double, gravityY: Double, gravityZ: Double) {
+        self.gravityX = gravityX
+        self.gravityY = gravityY
+        self.gravityZ = gravityZ
+    }
+
+    /// Sideways rotation of a portrait phone, with zero meaning a level
+    /// horizon. Derived from gravity so it is stable across motion sessions.
+    public var rollDegrees: Double {
+        atan2(gravityX, -gravityY) * 180 / .pi
+    }
+
+    /// Up/down camera elevation, with zero meaning the rear camera points
+    /// horizontally at the wall.
+    public var pitchDegrees: Double {
+        atan2(gravityZ, hypot(gravityX, gravityY)) * 180 / .pi
+    }
+}
+
 /// One video belonging to a session. The file lives inside the session
 /// directory so a session is a single self-contained folder.
 public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
@@ -20,6 +48,10 @@ public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
     /// `PHPicker` strips location and `AVCaptureMovieFileOutput` writes none.
     /// Used for session naming and nothing else; see `plan.md` §3.12.
     public var coordinate: Coordinate2D?
+    /// Present only for clips recorded inside the app. Photos imports have no
+    /// trustworthy motion sample, so they still provide a visual wall overlay
+    /// but deliberately provide no pitch/roll target.
+    public var captureOrientation: CaptureOrientation?
 
     public init(
         id: UUID = UUID(),
@@ -27,7 +59,8 @@ public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
         role: Role,
         recordedAt: Date = Date(),
         label: String = "",
-        coordinate: Coordinate2D? = nil
+        coordinate: Coordinate2D? = nil,
+        captureOrientation: CaptureOrientation? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -35,6 +68,7 @@ public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
         self.recordedAt = recordedAt
         self.label = label
         self.coordinate = coordinate
+        self.captureOrientation = captureOrientation
     }
 }
 

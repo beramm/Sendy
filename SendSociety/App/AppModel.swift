@@ -4,32 +4,6 @@ import Observation
 import PhotosUI
 import AVFoundation
 
-/// Which comparison view is on screen.
-///
-/// **View-layer only.** Switching modes must not re-run a single pipeline
-/// stage — everything every mode needs is already in `ProcessedSession`.
-///
-/// The alpha-composited `overlay` mode was removed rather than kept as a
-/// further tab. Its known weakness was recorded in `plan.md` from the start —
-/// two differently-sized bodies superimposed read as clutter, because the wall
-/// lines up and the humans do not — and `skeletonOverlay` covers the question
-/// it was actually being used for: whether the tracker is seeing the climber.
-enum ComparisonMode: String, CaseIterable, Identifiable {
-    case sideBySide
-    case skeletonOverlay
-    case skeletonOnly
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .sideBySide: "Side by side"
-        case .skeletonOverlay: "Skeleton overlay"
-        case .skeletonOnly: "Skeleton"
-        }
-    }
-}
-
 enum ProcessingState: Equatable {
     case idle
     case running(stage: String, stageIndex: Int, fraction: Double)
@@ -249,9 +223,19 @@ final class AppModel {
     }
 
     /// Recording equivalent of ``beginImport(_:role:)``.
-    func beginAddingVideo(from url: URL, role: VideoRef.Role) {
+    func beginAddingVideo(
+        from url: URL,
+        role: VideoRef.Role,
+        captureOrientation: CaptureOrientation? = nil
+    ) {
         setImportState(.loading, for: role)
-        Task { await addVideo(from: url, role: role) }
+        Task {
+            await addVideo(
+                from: url,
+                role: role,
+                captureOrientation: captureOrientation
+            )
+        }
     }
 
     /// The whole picker-to-disk path, owned by the model so the slot it belongs
@@ -279,11 +263,19 @@ final class AppModel {
 
     /// Recording path. Same states as the picker path, so the clips screen
     /// reads the same however the video arrived.
-    func addVideo(from url: URL, role: VideoRef.Role) async {
+    func addVideo(
+        from url: URL,
+        role: VideoRef.Role,
+        captureOrientation: CaptureOrientation? = nil
+    ) async {
         guard session != nil else { return }
         setImportState(.loading, for: role)
         do {
-            try await persist(url, role: role)
+            try await persist(
+                url,
+                role: role,
+                captureOrientation: captureOrientation
+            )
             setImportState(.idle, for: role)
         } catch {
             setImportState(.failed("Could not import the video: \(error.localizedDescription)"), for: role)
@@ -315,7 +307,12 @@ final class AppModel {
         }
     }
 
-    private func persist(_ url: URL, role: VideoRef.Role, photoItem: PhotosPickerItem? = nil) async throws {
+    private func persist(
+        _ url: URL,
+        role: VideoRef.Role,
+        photoItem: PhotosPickerItem? = nil,
+        captureOrientation: CaptureOrientation? = nil
+    ) async throws {
         guard var current = session else { return }
         // Replacing the reference deletes the old file first — overwriting the
         // ref alone would orphan a video inside the session directory forever.
@@ -326,6 +323,7 @@ final class AppModel {
         let label = role == .reference ? "Reference" : "Attempt \(current.attempts.count + 1)"
         var ref = try await store.importVideo(from: url, into: current, role: role, label: label)
         ref.coordinate = await coordinate(of: url, photoItem: photoItem)
+        ref.captureOrientation = captureOrientation
         if role == .reference {
             current.reference = ref
         } else {
@@ -360,6 +358,7 @@ final class AppModel {
         // reliably keep the location metadata, and the clip was filmed at the
         // same gym it was filmed at before it was trimmed.
         replacement.coordinate = original.coordinate
+        replacement.captureOrientation = original.captureOrientation
 
         if original.role == .reference {
             current.reference = replacement
@@ -548,6 +547,13 @@ final class AppModel {
                 self.lastProcessingWasCached = result.stages
                     .first { $0.name == "Pose extraction" }?.detail.contains("cached") == true
                 self.state = .done
+                // Completion owns the navigation hand-off. Relying only on
+                // ProcessingView.onChange leaves a race: the task can publish
+                // `.done` while NavigationStack is still settling after the
+                // setup screen pushed `.processing`, and SwiftUI may never
+                // deliver that view-level callback. The screenshot then says
+                // "Comparison ready" forever even though `processed` exists.
+                self.advanceToResultsIfReady()
                 self.analysisProviderName = result.analyses.first?.source ?? "Template"
                 var updated = session
                 updated.config = config
@@ -563,6 +569,17 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// Replaces the transient processing destination with results in one path
+    /// mutation. Safe to call both from the processing task and from the view's
+    /// lifecycle fallback because it is idempotent.
+    func advanceToResultsIfReady() {
+        guard state == .done, processed != nil else { return }
+        var destinationPath = path.filter { $0 != .processing }
+        if destinationPath.last != .results { destinationPath.append(.results) }
+        guard destinationPath != path else { return }
+        path = destinationPath
     }
 
     /// Submit-to-output time, formatted, or nil before the first finished run.

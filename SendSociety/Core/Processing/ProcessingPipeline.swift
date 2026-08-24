@@ -64,7 +64,14 @@ public struct ProcessedSession: Sendable {
     public var referenceSectionMetrics: [SectionMetrics]
     public var attemptSectionMetrics: [SectionMetrics]
     public var deltas: [SectionDelta]
+    /// Direct anchor-to-anchor measurements. Unlike move deltas, these remain
+    /// comparable when the climbers use different moves between shared anchors.
+    public var sequenceDeltas: [SectionDelta]
+    /// Detailed move-level output retained for provider compatibility and
+    /// instrumentation. The Results UI does not present this array.
     public var analyses: [SectionAnalysis]
+    /// One primary finding per comparison sequence for `ResultsView`.
+    public var sequenceAnalyses: [SequenceAnalysis]
     public var fallReport: FallReport
     public var fallAnalysis: SectionAnalysis?
     public var alignment: AlignmentResult
@@ -91,6 +98,14 @@ public struct ProcessedSession: Sendable {
 
     public func analysis(forSection index: Int) -> SectionAnalysis? {
         analyses.first { $0.sectionIndex == index }
+    }
+
+    public func analysis(forSequence index: Int) -> SequenceAnalysis? {
+        sequenceAnalyses.first { $0.sequenceIndex == index }
+    }
+
+    public func delta(forSequence index: Int) -> SectionDelta? {
+        sequenceDeltas.first { $0.sectionIndex == index }
     }
 }
 
@@ -419,9 +434,48 @@ public actor ProcessingPipeline {
                 alignmentCost: warpPaths.first { $0.sectionIndex == section.index }?.meanCost
             ))
         }
+
+        // Measure complete anchor-to-anchor spans as Results analytics' source
+        // of truth. The move deltas above cannot fairly compare a
+        // reference move with a different attempt move, but a sequence whose
+        // endpoints are shared anchors remains comparable as a whole.
+        var sequenceDeltas: [SectionDelta] = []
+        for climbSequence in sequenceResult.sequences {
+            guard climbSequence.fromAnchorID >= 0,
+                  climbSequence.toAnchorID >= 0,
+                  climbSequence.fromAnchorID != climbSequence.toAnchorID,
+                  climbSequence.attemptReached,
+                  let targetHold = route.hold(id: climbSequence.toAnchorID)
+            else { continue }
+
+            let reference = engine.sequenceMetrics(
+                climbSequence: climbSequence,
+                range: climbSequence.referenceRange,
+                metrics: referenceMetrics,
+                poseSequence: referencePose,
+                contacts: referenceContactResult.contacts,
+                targetHold: targetHold,
+                config: config
+            )
+            let attempt = engine.sequenceMetrics(
+                climbSequence: climbSequence,
+                range: climbSequence.attemptRange,
+                metrics: attemptMetrics,
+                poseSequence: attemptPose,
+                contacts: attemptContactResult.contacts,
+                targetHold: targetHold,
+                config: config
+            )
+            sequenceDeltas.append(engine.delta(
+                climbSequence: climbSequence,
+                reference: reference,
+                attempt: attempt,
+                alignmentCost: sequenceWarpPaths.first { $0.sectionIndex == climbSequence.index }?.meanCost
+            ))
+        }
         report(
             "Metrics", t, .ok,
-            "\(deltas.count) moves measured",
+            "\(deltas.count) moves, \(sequenceDeltas.count) comparable sequences measured",
             referenceMetrics.warnings + attemptMetrics.warnings
         )
 
@@ -472,9 +526,19 @@ public actor ProcessingPipeline {
             }
         }
         let fallAnalysis = try? await analysisProvider.analyzeFall(fallReport, sections: deltas)
+        let sequenceComposer = SequenceAnalysisComposer(config: config)
+        let sequenceAnalyses = sequenceResult.sequences.map { sequence in
+            sequenceComposer.compose(
+                sequence: sequence,
+                sectionDeltas: deltas,
+                sequenceDelta: sequenceDeltas.first { $0.sectionIndex == sequence.index },
+                fallReport: fallReport,
+                fallAnalysis: fallAnalysis
+            )
+        }
         report(
             "Analysis", t, .ok,
-            "\(analyses.count) moves, \(fallReport.occurred ? "fall detected" : "no fall")",
+            "\(analyses.count) moves, \(sequenceAnalyses.count) sequences, \(fallReport.occurred ? "fall detected" : "no fall")",
             fallReport.warnings + referenceWarnings
         )
 
@@ -498,7 +562,9 @@ public actor ProcessingPipeline {
             referenceSectionMetrics: referenceSectionMetrics,
             attemptSectionMetrics: attemptSectionMetrics,
             deltas: deltas,
+            sequenceDeltas: sequenceDeltas,
             analyses: analyses,
+            sequenceAnalyses: sequenceAnalyses,
             fallReport: fallReport,
             fallAnalysis: fallAnalysis,
             alignment: alignment,

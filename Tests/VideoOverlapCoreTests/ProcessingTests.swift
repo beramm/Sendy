@@ -99,6 +99,7 @@ struct ProcessingTests {
         #expect(!result.route.holds.isEmpty)
         #expect(!result.sections.isEmpty)
         #expect(result.analyses.count == result.sections.count)
+        #expect(result.sequenceAnalyses.count == result.sequences.sequences.count)
         #expect(result.stages.count == ProcessingPipeline.stageCount)
         #expect(result.stages.allSatisfy { $0.seconds >= 0 })
         // And no stage silently swallowed its warnings.

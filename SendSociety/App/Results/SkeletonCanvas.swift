@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Which analytical overlays are drawn on top of the skeletons.
+/// Which analytical overlays are drawn on top of shared skeleton surfaces.
 ///
 /// These are illegible over real footage and obvious on a stick figure, which
 /// is why skeleton-only mode exists. **The fall analysis is only properly
@@ -10,17 +10,11 @@ struct AnalyticalOverlays: Equatable {
     var centreOfMass = true
     var baseOfSupport = true
     var limbLoad = true
-    /// The coach's pelvis triangle — two hips and the pubic bone — plus the
-    /// hip line and its tilt. A coach reads the pelvis before anything else and
-    /// draws exactly this on a still with a finger; drawing it *on the climber*
-    /// is what makes the number legible, which was the single clearest piece of
-    /// feedback from the coaching review.
+    /// Coach-readable pelvis geometry produced by `PostureEstimator`.
     var pelvisTriangle = true
-    /// Vertical through the pelvis, against the line the body actually makes.
-    /// The gap between them is the lean, and the lean says which arm is
-    /// working.
+    /// Vertical through the pelvis against the climber's torso line.
     var plumbLine = true
-    /// Knee against its own ankle. Past the toe is a drop knee or a flag.
+    /// Knee position relative to its ankle.
     var kneeLine = false
     var divergenceVectors = false
     var holds = true
@@ -96,18 +90,19 @@ struct SkeletonCanvas: View {
 
     var body: some View {
         Canvas { context, size in
-            let rect = CGRect(origin: .zero, size: size)
+            let canvasRect = CGRect(origin: .zero, size: size)
+            let contentRect = aspectFittedRect(in: size)
             if drawsBackground {
-                context.fill(Path(rect), with: .color(.gray.opacity(0.12)))
+                context.fill(Path(canvasRect), with: .color(.gray.opacity(0.12)))
             }
-            // The plate is drawn in the same normalized frame as everything
-            // else on this canvas, so it stretches to the full rect rather than
-            // being letterboxed — a hold at (0.5, 0.5) must land on the wall
-            // pixel at (0.5, 0.5), which is the entire point of showing it.
+            // The wall, route and skeletons all use the same aspect-fitted
+            // rectangle. Filling the card would preserve normalized coordinates
+            // but distort their physical x/y scale whenever the card and source
+            // video have different aspect ratios.
             if let wallPlate, overlays.wallBackdrop {
-                context.draw(Image(decorative: wallPlate, scale: 1), in: rect)
+                context.draw(Image(decorative: wallPlate, scale: 1), in: contentRect)
                 context.fill(
-                    Path(rect),
+                    Path(contentRect),
                     with: .color(Color(.systemBackground).opacity(max(0, min(1, overlays.wallWash))))
                 )
             }
@@ -268,8 +263,8 @@ struct SkeletonCanvas: View {
     }
 
     /// The three reads a coach draws on the body itself: pelvis, plumb line,
-    /// knee. Every figure here comes from `PostureFrame` — this function
-    /// measures nothing, it only draws what was already measured.
+    /// and knee. Every figure comes from `PostureFrame`; rendering measures
+    /// nothing and only presents the pipeline output.
     private func drawPosture(
         frame: PoseFrame,
         metrics: FrameMetrics,
@@ -293,26 +288,23 @@ struct SkeletonCanvas: View {
             context.fill(triangle, with: .color(colour.opacity(0.18)))
             context.stroke(triangle, with: .color(colour), lineWidth: 2)
 
-            // The hip line gets its own weight: it is the thing the tilt figure
-            // is about, and it disappears into the triangle without it.
             var hipLine = Path()
             hipLine.move(to: a)
             hipLine.addLine(to: b)
             context.stroke(hipLine, with: .color(.white), lineWidth: 3)
             context.stroke(hipLine, with: .color(colour), lineWidth: 1.5)
 
-            // Which way the pelvis points, drawn as the apex direction. This is
-            // the coach's "where is the pubic bone facing".
             let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
             var apexLine = Path()
             apexLine.move(to: mid)
             apexLine.addLine(to: c)
-            context.stroke(apexLine, with: .color(colour.opacity(0.8)),
-                           style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+            context.stroke(
+                apexLine,
+                with: .color(colour.opacity(0.8)),
+                style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])
+            )
 
             var label = String(format: "%.0f° tilt", abs(pelvis.tiltDegrees))
-            // Only quote a turn the estimate can actually carry. Near square the
-            // number is arbitrary, and printing it makes a guess look measured.
             if let turn = pelvis.turnDegrees, pelvis.turnConfidence >= 0.3 {
                 label += String(format: " · %.0f° turned", turn)
             }
@@ -326,14 +318,16 @@ struct SkeletonCanvas: View {
         if overlays.plumbLine, let pelvis = posture.pelvis,
            let centre = normalized(pelvis.center, frame: frame, scale: scale) {
             let hip = point(centre, in: size)
-            // Screen vertical through the pelvis: the plumb line itself.
+            let contentHeight = aspectFittedRect(in: size).height
             var plumb = Path()
-            plumb.move(to: CGPoint(x: hip.x, y: hip.y - size.height * 0.30))
-            plumb.addLine(to: CGPoint(x: hip.x, y: hip.y + size.height * 0.12))
-            context.stroke(plumb, with: .color(.white.opacity(0.75)),
-                           style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            plumb.move(to: CGPoint(x: hip.x, y: hip.y - contentHeight * 0.30))
+            plumb.addLine(to: CGPoint(x: hip.x, y: hip.y + contentHeight * 0.12))
+            context.stroke(
+                plumb,
+                with: .color(.white.opacity(0.75)),
+                style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+            )
 
-            // The line the body actually makes, against it.
             if let shoulder = frame.shoulderCenter,
                let shoulderPoint = normalized(shoulder, frame: frame, scale: scale) {
                 var body = Path()
@@ -345,7 +339,7 @@ struct SkeletonCanvas: View {
                 context.draw(
                     Text(String(format: "%.0f° %@", abs(lean), lean > 0 ? "right" : "left"))
                         .font(.system(size: 9, weight: .medium)).foregroundStyle(.yellow),
-                    at: CGPoint(x: hip.x + 6, y: hip.y - size.height * 0.16),
+                    at: CGPoint(x: hip.x + 6, y: hip.y - contentHeight * 0.16),
                     anchor: .leading
                 )
             }
@@ -359,20 +353,23 @@ struct SkeletonCanvas: View {
                 guard let offset,
                       let k = normalized(frame, knee, scale: scale),
                       let a = normalized(frame, ankle, scale: scale) else { continue }
-                let kp = point(k, in: size), ap = point(a, in: size)
+                let kneePoint = point(k, in: size), anklePoint = point(a, in: size)
                 var vertical = Path()
-                vertical.move(to: ap)
-                vertical.addLine(to: CGPoint(x: ap.x, y: kp.y))
-                context.stroke(vertical, with: .color(.teal.opacity(0.8)),
-                               style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                vertical.move(to: anklePoint)
+                vertical.addLine(to: CGPoint(x: anklePoint.x, y: kneePoint.y))
+                context.stroke(
+                    vertical,
+                    with: .color(.teal.opacity(0.8)),
+                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                )
                 var across = Path()
-                across.move(to: CGPoint(x: ap.x, y: kp.y))
-                across.addLine(to: kp)
+                across.move(to: CGPoint(x: anklePoint.x, y: kneePoint.y))
+                across.addLine(to: kneePoint)
                 context.stroke(across, with: .color(.teal), lineWidth: 2)
                 context.draw(
                     Text(String(format: "%.2f", abs(offset)))
                         .font(.system(size: 8)).foregroundStyle(.teal),
-                    at: CGPoint(x: kp.x, y: kp.y - 8)
+                    at: CGPoint(x: kneePoint.x, y: kneePoint.y - 8)
                 )
             }
         }
@@ -423,7 +420,35 @@ struct SkeletonCanvas: View {
     /// Wall space is y-up; Canvas is y-down.
     private func point(_ p: Point2D, in size: CGSize) -> CGPoint {
         let q = transform?.apply(to: p) ?? p
-        return CGPoint(x: q.x * size.width, y: (1 - q.y) * size.height)
+        let rect = aspectFittedRect(in: size)
+        return CGPoint(
+            x: rect.minX + q.x * rect.width,
+            y: rect.minY + (1 - q.y) * rect.height
+        )
+    }
+
+    /// Preserves the source video's pixel aspect inside an arbitrary result
+    /// card. The wall plate is authoritative when present; otherwise the climb
+    /// scale carries the source width/height ratio through `IsoMetric.xScale`.
+    private func aspectFittedRect(in size: CGSize) -> CGRect {
+        guard size.width > 0, size.height > 0 else { return .zero }
+        let sourceAspect: CGFloat
+        if let wallPlate, wallPlate.width > 0, wallPlate.height > 0 {
+            sourceAspect = CGFloat(wallPlate.width) / CGFloat(wallPlate.height)
+        } else if let scale = referenceScale ?? attemptScale {
+            sourceAspect = CGFloat(scale.iso.xScale)
+        } else {
+            return CGRect(origin: .zero, size: size)
+        }
+        guard sourceAspect > 0 else { return CGRect(origin: .zero, size: size) }
+
+        let canvasAspect = size.width / size.height
+        if sourceAspect > canvasAspect {
+            let height = size.width / sourceAspect
+            return CGRect(x: 0, y: (size.height - height) / 2, width: size.width, height: height)
+        }
+        let width = size.height * sourceAspect
+        return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
     }
 }
 
@@ -450,11 +475,13 @@ struct SkeletonOverlayPane: View {
     /// `nil` for the reference, whose image space *is* wall space.
     let transform: Homography?
     let overlays: AnalyticalOverlays
-    /// True while a finger is on the scrubber — keyframes during a drag, the
-    /// exact frame once it ends. See `FrameImageCache.Fidelity`.
+    /// Keyframes during an active drag and exact frames after it settles.
     let scrubbing: Bool
-    /// Shared with every other pane on the screen.
+    /// Shared by all panes in one Results screen.
     let cache: FrameImageCache
+    /// The Results screen places compact REF/YOU badges inside the footage. Nil
+    /// preserves the current diagnostic screen's caption-above presentation.
+    var badgeLabel: String? = nil
     var unavailableReason: String = "not reached"
 
     @State private var frames = VideoFrameLoader()
@@ -463,8 +490,10 @@ struct SkeletonOverlayPane: View {
     private var frame: PoseFrame? { frameIndex.flatMap { pose.frame(at: $0) } }
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+        VStack(spacing: badgeLabel == nil ? 2 : 0) {
+            if badgeLabel == nil {
+                Text(title).font(.caption2).foregroundStyle(.secondary)
+            }
             GeometryReader { geometry in
                 // The skeleton has to land in the same rectangle the video is
                 // drawn in, not in the pane. An aspect-fit image letterboxes
@@ -492,6 +521,9 @@ struct SkeletonOverlayPane: View {
                             centreOfMass: overlays.centreOfMass,
                             baseOfSupport: overlays.baseOfSupport,
                             limbLoad: overlays.limbLoad,
+                            pelvisTriangle: overlays.pelvisTriangle,
+                            plumbLine: overlays.plumbLine,
+                            kneeLine: overlays.kneeLine,
                             divergenceVectors: false,
                             holds: false,
                             wallBackdrop: false
@@ -525,9 +557,21 @@ struct SkeletonOverlayPane: View {
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     }
+
+                    if let badgeLabel {
+                        Text(badgeLabel)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 34)
+                            .background(.white, in: .capsule)
+                            .overlay { Capsule().stroke(.black.opacity(0.25), lineWidth: 0.5) }
+                            .padding(10)
+                    }
                 }
             }
         }
+        .clipShape(.rect(cornerRadius: badgeLabel == nil ? 0 : ResultsStyle.paneCornerRadius))
         .task(id: video?.id) {
             guard let video else { url = nil; return }
             url = await model.videoURL(video)
@@ -545,7 +589,9 @@ struct SkeletonOverlayPane: View {
 
     /// Where an aspect-fit image of this size actually lands inside the pane.
     private func fittedRect(in size: CGSize) -> CGRect {
-        guard let image = frames.image, image.width > 0, image.height > 0, size.width > 0, size.height > 0 else {
+        guard let image = frames.image,
+              image.width > 0, image.height > 0,
+              size.width > 0, size.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
         let imageAspect = CGFloat(image.width) / CGFloat(image.height)
@@ -558,4 +604,3 @@ struct SkeletonOverlayPane: View {
         return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
     }
 }
-
