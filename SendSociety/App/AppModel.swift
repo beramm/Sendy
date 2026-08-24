@@ -94,7 +94,6 @@ final class AppModel {
         Task { await refresh() }
     }
 
-#if DEBUG
     /// In-memory state for SwiftUI previews. It intentionally bypasses the
     /// store refresh so preview fixtures never race with on-disk sessions.
     init(previewSession: ClimbSession? = nil, previewSessions: [ClimbSession] = []) {
@@ -102,7 +101,6 @@ final class AppModel {
         sessions = previewSessions
         if let previewSession { config = previewSession.config }
     }
-#endif
 
     // MARK: Readiness
 

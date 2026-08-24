@@ -31,17 +31,17 @@ struct SessionSetupView: View {
                     .padding(.bottom, 6)
 
                 sessionName
-                    .padding(.bottom, 56)
+                    .padding(.bottom, 40)
 
                 HStack(alignment: .top, spacing: 24) {
                     clipColumn(
                         role: .reference,
-                        title: "Climber 1",
+                        title: "Reference",
                         video: model.session?.reference
                     )
                     clipColumn(
                         role: .attempt,
-                        title: "Climber 2",
+                        title: "Attempt",
                         video: model.session?.attempts.first
                     )
                 }
@@ -54,6 +54,10 @@ struct SessionSetupView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
+                    // Importing only. A pulse means work in progress; pulsing a
+                    // settled "Ready to compare" claims the app is busy when it
+                    // is not.
+                    .pulsing(model.isImporting)
                     .padding(.bottom, 36)
 
                 compareButton
@@ -156,48 +160,27 @@ struct SessionSetupView: View {
     /// cache, so the next session at this gym inherits the climber's name
     /// rather than Apple's label for the building.
     private var sessionName: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TextField("Session name", text: $editedName)
-                .font(.system(size: 18, weight: .medium))
-                .textFieldStyle(.plain)
-                .focused($nameFocused)
-                .submitLabel(.done)
-                .onSubmit { nameFocused = false }
-                // Commit on *losing focus* rather than on submit, so a name
-                // typed and then tapped away from is kept. Committing only on
-                // submit silently discarded the edit by every other exit.
-                .onChange(of: nameFocused) { _, focused in
-                    guard !focused else { return }
-                    let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // An emptied field is an abandoned edit, not a request for
-                    // a nameless session. `renameSession` refuses it either
-                    // way; this puts the real name back on screen.
-                    guard !trimmed.isEmpty else {
-                        editedName = model.session?.name ?? ""
-                        return
-                    }
-                    Task { await model.renameSession(to: editedName) }
+        TextField("Session name", text: $editedName)
+            .font(.system(size: 18, weight: .medium))
+            .textFieldStyle(.plain)
+            .focused($nameFocused)
+            .submitLabel(.done)
+            .onSubmit { nameFocused = false }
+            // Commit on *losing focus* rather than on submit, so a name
+            // typed and then tapped away from is kept. Committing only on
+            // submit silently discarded the edit by every other exit.
+            .onChange(of: nameFocused) { _, focused in
+                guard !focused else { return }
+                let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+                // An emptied field is an abandoned edit, not a request for
+                // a nameless session. `renameSession` refuses it either
+                // way; this puts the real name back on screen.
+                guard !trimmed.isEmpty else {
+                    editedName = model.session?.name ?? ""
+                    return
                 }
-            Text(nameProvenance)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Where the name came from, stated plainly.
-    ///
-    /// The date case deliberately reads as an outcome rather than a failure.
-    /// Gyms are windowless warehouses where GPS and cell both fail, so a date
-    /// name is the *normal* result — dressing it as "location unavailable"
-    /// would put a warning on the majority case and teach the user to ignore
-    /// warnings.
-    private var nameProvenance: String {
-        switch model.sessionNameSource {
-        case .user: "Your name. Nothing renames it."
-        case .cache: "Named from a gym you've been to before."
-        case .network: "Named from Apple Maps. Rename it and the next session here inherits your name."
-        case .date: "Named by date. Rename it whenever you like."
-        }
+                Task { await model.renameSession(to: editedName) }
+            }
     }
 
     private var statusText: String {
@@ -252,9 +235,23 @@ private struct ClipCard: View {
                     .fill(Color.white.opacity(0.20))
 
                 if let thumbnail {
-                    Image(decorative: thumbnail, scale: 1)
-                        .resizable()
-                        .scaledToFill()
+                    // The thumbnail must not be allowed to size the card.
+                    // `scaledToFill` reports the overflowing size it needs to
+                    // cover the proposal, and a `ZStack` takes the union of its
+                    // children — so a clip wider than 0.52 grew the card past
+                    // the aspect ratio the empty card obeys, pushed the whole
+                    // row outside the screen's horizontal padding, and left the
+                    // filled column visibly misaligned with the title above it.
+                    // `Color.clear` accepts exactly the proposal, and an
+                    // overlay is sized to its parent, so the image can overflow
+                    // and be clipped without ever driving layout.
+                    Color.clear
+                        .overlay {
+                            Image(decorative: thumbnail, scale: 1)
+                                .resizable()
+                                .scaledToFill()
+                        }
+                        .clipped()
                 }
 
                 Color.black.opacity(thumbnail == nil ? 0 : 0.18)

@@ -3,6 +3,11 @@ import SwiftUI
 struct ResultNumbersSheet: View {
     let insight: SequenceAnalysis
 
+    /// Collapsed by default. The four ranked rows answer "what differed most
+    /// here"; the rest are a reference table, and putting them up front would
+    /// turn the sheet into a spreadsheet.
+    @State private var showingAllMetrics = false
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 5) {
@@ -27,7 +32,7 @@ struct ResultNumbersSheet: View {
                 .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: 24) {
                         if !insight.comparisonIsValid {
                             Label {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -50,6 +55,36 @@ struct ResultNumbersSheet: View {
                                 comparisonIsValid: insight.comparisonIsValid
                             )
                         }
+
+                        if !insight.additionalMetrics.isEmpty {
+                            DisclosureGroup(isExpanded: $showingAllMetrics) {
+                                LazyVStack(spacing: 24) {
+                                    ForEach(insight.additionalMetrics, id: \.kind) { metric in
+                                        MetricComparisonRow(
+                                            metric: metric,
+                                            comparisonIsValid: insight.comparisonIsValid
+                                        )
+                                    }
+                                }
+                                .padding(.top, 20)
+                            } label: {
+                                Text("Show all measurements (\(insight.additionalMetrics.count) more)")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(AppTheme.accent)
+                            }
+                            .tint(AppTheme.accent)
+                            .padding(.top, 8)
+                        }
+
+                        // An absent metric otherwise reads the same whether it
+                        // ranked low or could not be measured. Say which.
+                        if insight.suppressedMetricCount > 0 {
+                            Text(suppressedMetricsExplanation)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 12)
+                        }
                     }
                     .padding(.horizontal, 24)
                     .padding(.bottom, 32)
@@ -63,6 +98,12 @@ struct ResultNumbersSheet: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(30)
         .presentationBackground(ResultsStyle.sheetSurface)
+    }
+
+    private var suppressedMetricsExplanation: String {
+        let count = insight.suppressedMetricCount
+        let noun = count == 1 ? "measurement was" : "measurements were"
+        return "\(count) \(noun) not reliable enough to show for this sequence."
     }
 
     private var comparisonUnavailableExplanation: String {

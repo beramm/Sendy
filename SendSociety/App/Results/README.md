@@ -282,10 +282,19 @@ An internal move-level divergence does not by itself invalidate an anchor-bounde
 - REF is accent green in video badges, skeletons, difference-card badges, and Detailed Analytics.
 - YOU is blue in the same surfaces.
 - The complete available main-difference sentence is white; unavailable comparison text is muted. Cause text is not colored or styled separately inside the sentence.
-- Accent green also marks the active skeleton button and selected or move-count-different sequence buttons. Those are control/state meanings, not a third climber identity.
-- Fall remains red with `F` and takes priority over normal sequence-button background colors.
+- Accent green also marks the active skeleton button and move-count-different sequence buttons. Those are control/state meanings, not a third climber identity.
+- Selection does **not** colour a sequence button. Selection is marked by position — the chosen chip scrolls to the centre of the strip — plus its existing height, width and weight. Green previously meant both "selected" and "move counts differ", which made an ordinary selected sequence indistinguishable from an unselected differing one. A strip short enough not to overflow cannot centre; size and weight carry it there.
+- Fall remains red and takes priority over normal sequence-button background colors. The `F` glyph is gone — it collided with the number on the selected chip, and the fall is stated in full on the cards below. VoiceOver still announces it through the button's accessibility value.
+
+## Why the attempt is "YOU" and not "Attempt"
+
+The setup and capture screens name the two clips **Reference** and **Attempt**, per the domain glossary. Results deliberately does not follow: it says **YOU**.
+
+Results is the app talking *to* the climber about *their own* climb, and its generated sentences are second person — "You fell during this sequence." `ResultsView` derives those subjects from the badge label itself, so renaming the badge to ATTEMPT without rewriting every finding into third person would put "ATTEMPT" above a card reading "You fell". The second person is the decision; the badge follows it.
 
 ## Detailed Analytics availability
+
+`SequenceAnalysis.metrics` contains the four most divergent reliable sequence metrics — a presentation cap, not the limit of what is measured. `MetricKind` defines forty metrics and the pipeline computes all of them; the ranked remainder is carried in `SequenceAnalysis.additionalMetrics` and reached through the sheet's "Show all measurements" disclosure. `SequenceAnalysis.suppressedMetricCount` reports how many metric *kinds* were computed here but never cleared the confidence floor, so an absent metric is distinguishable from one that merely ranked low.
 
 `SequenceAnalysis.metrics` contains reliable sequence metrics selected for comparative detail. Standalone metrics remain here even when they cannot produce a causal insight. When a causal metric drives the card pair, that observation metric is placed first. The array may be empty when:
 

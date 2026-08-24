@@ -19,6 +19,10 @@ struct ProcessingView: View {
                 Text(title).font(.largeTitle.bold().monospaced())
                 Text(detail).font(.title3.monospaced()).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    // Running only. The same `Text` carries the failure
+                    // reassurance and the idle string, and a pulsing failure
+                    // message reads as a process that is still going.
+                    .pulsing(isRunning)
                 if case .running(_, let index, let fraction) = model.state {
                     // Clamped because a stage reporting a fraction slightly past
                     // 1 would otherwise print "101%" — the bar itself clips, but
@@ -58,6 +62,11 @@ struct ProcessingView: View {
         // no state *change* left to observe in that case, and without this the
         // screen waits for an event that has already happened.
         .task { model.advanceToResultsIfReady() }
+    }
+
+    private var isRunning: Bool {
+        if case .running = model.state { return true }
+        return false
     }
 
     private var title: String {

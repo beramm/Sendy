@@ -17,6 +17,10 @@ struct AnalyticalOverlays: Equatable {
     /// Knee position relative to its ankle.
     var kneeLine = false
     var divergenceVectors = false
+    /// Degree and offset text drawn onto the body. Diagnostic screens want it;
+    /// Results does not — the numbers live in Detailed Analytics, and on
+    /// footage they crowd the shape the overlay exists to show.
+    var annotations = true
     var holds = true
     /// The wall the route was derived from, behind the skeletons. Off gives
     /// back the plain diagram, which is easier to read and tells you nothing
@@ -30,7 +34,59 @@ struct AnalyticalOverlays: Equatable {
     static let none = AnalyticalOverlays(
         centreOfMass: false, baseOfSupport: false, limbLoad: false,
         pelvisTriangle: false, plumbLine: false, kneeLine: false,
-        divergenceVectors: false, holds: false, wallBackdrop: false
+        divergenceVectors: false, annotations: false, holds: false,
+        wallBackdrop: false
+    )
+
+    /// What the Results comparison starts with: the body, the pelvis, and the
+    /// centre of mass, and nothing else. Every other overlay is still one
+    /// toggle away — this is a starting point, not a reduced feature set.
+    ///
+    /// The reads that come off first are the ones that need a second line to
+    /// interpret: a plumb line and a base-of-support polygon are geometry about
+    /// geometry, and over gym footage they read as clutter laid on the climber
+    /// rather than as a measurement of them.
+    ///
+    /// Its opposite is ``live``, one menu item away.
+    static let clean = AnalyticalOverlays(
+        centreOfMass: true, baseOfSupport: false, limbLoad: false,
+        pelvisTriangle: true, plumbLine: false, kneeLine: false,
+        divergenceVectors: false, annotations: false, holds: false,
+        wallBackdrop: true
+    )
+
+    /// This set with the hold circles off, for the wall-plate overlay: the
+    /// wall is already in the picture, and circles drawn over real holds are
+    /// noise.
+    ///
+    /// Both of these copy the receiver and change what differs, rather than
+    /// listing every field. A field-by-field copy silently keeps the default
+    /// for anything added later — which is exactly how Overlay ended up
+    /// printing tilt and turn figures with Live Analytics switched off.
+    var withoutHolds: AnalyticalOverlays {
+        var copy = self
+        copy.holds = false
+        return copy
+    }
+
+    /// This set as drawn straight onto video: no holds, no wall diagram, and no
+    /// divergence vectors, all of which belong to the synthetic wall view.
+    var overFootage: AnalyticalOverlays {
+        var copy = self
+        copy.holds = false
+        copy.wallBackdrop = false
+        copy.divergenceVectors = false
+        return copy
+    }
+
+    /// Everything the frame was measured for, drawn on the body: base of
+    /// support, per-limb load, the plumb line, knee over toe, and the figures
+    /// beside each of them.
+    static let live = AnalyticalOverlays(
+        centreOfMass: true, baseOfSupport: true, limbLoad: true,
+        pelvisTriangle: true, plumbLine: true, kneeLine: true,
+        divergenceVectors: false, annotations: true, holds: false,
+        wallBackdrop: true
     )
 }
 
@@ -184,34 +240,54 @@ struct SkeletonCanvas: View {
         size: CGSize,
         label: String
     ) {
+        // **Line weight follows the climber, not the canvas.** A constant width
+        // is only ever right at one distance from the wall: on a frame that
+        // holds the whole route the body is small, and a 7pt limb swells until
+        // the torso quad's own strokes meet and swallow the shape they are
+        // drawing. Measuring the torso first keeps the skeleton reading the
+        // same whether the climber fills the pane or crosses it.
+        let torsoPixels: CGFloat = {
+            guard let shoulder = frame.shoulderCenter, let hip = frame.hipCenter,
+                  let s = normalized(shoulder, frame: frame, scale: scale),
+                  let h = normalized(hip, frame: frame, scale: scale) else { return 0 }
+            let a = point(s, in: size), b = point(h, in: size)
+            return hypot(a.x - b.x, a.y - b.y)
+        }()
+        let boneWidth = min(max(torsoPixels * 0.085, 1.5), 9)
+
         for (a, b) in skeletonBones {
             guard let pa = normalized(frame, a, scale: scale), let pb = normalized(frame, b, scale: scale) else { continue }
             var path = Path()
             path.move(to: point(pa, in: size))
             path.addLine(to: point(pb, in: size))
 
-            var width: CGFloat = 2.5
+            var width = boneWidth
             var strokeColour = colour
             if overlays.limbLoad, let metrics {
                 // Per-limb load colouring: thicker and hotter means more of the
-                // climber's weight is going through that limb.
+                // climber's weight is going through that limb. Off by default,
+                // because a uniform limb is what makes the pose readable.
                 let load = limbLoad(metrics: metrics, a: a, b: b)
                 if load > 0 {
-                    width = 2.5 + CGFloat(load) * 10
+                    width = boneWidth * (1 + CGFloat(load))
                     strokeColour = colour.opacity(0.55 + load * 0.45)
                 }
             }
-            context.stroke(path, with: .color(strokeColour), lineWidth: width)
+            context.stroke(
+                path,
+                with: .color(strokeColour),
+                style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+            )
         }
 
         for name in JointName.extremities {
-            guard let p = normalized(frame, name, scale: scale) else { continue }
-            let onWall = metrics?.activeContacts.contains(name) ?? false
+            guard let p = normalized(frame, name, scale: scale),
+                  metrics?.activeContacts.contains(name) == true else { continue }
             let c = point(p, in: size)
-            let r: CGFloat = onWall ? 6 : 4
+            let r = boneWidth * 0.8
             context.fill(
                 Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)),
-                with: .color(onWall ? colour : colour.opacity(0.35))
+                with: .color(colour)
             )
         }
 
@@ -229,12 +305,24 @@ struct SkeletonCanvas: View {
             }
         }
 
-        drawPosture(frame: frame, metrics: metrics, scale: scale, colour: colour, in: &context, size: size)
+        drawPosture(
+            frame: frame, metrics: metrics, scale: scale, colour: colour,
+            in: &context, size: size, boneWidth: boneWidth
+        )
 
         if overlays.centreOfMass, let com = metrics.com, let p = normalized(com, frame: frame, scale: scale) {
             let c = point(p, in: size)
-            let r: CGFloat = 7
+            // Sized off the same body measure as the limbs, so the disc reads
+            // as part of the skeleton rather than a sticker laid on top.
+            let r = min(max(boneWidth * 1.25, 4), 12)
             let ellipse = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+            // The word always appears, and always directly above the disc — a
+            // coloured dot on a spray wall is indistinguishable from a hold
+            // without it, and a fixed side keeps it findable rather than making
+            // the reader hunt for wherever it fitted this frame. Above rather
+            // than inside because the disc is sized to the climber and is
+            // routinely too small to hold three letters.
+            let labelText = Text("CoM").font(.system(size: max(9, r * 0.9), weight: .bold))
 
             // **Three states, because "outside" and "no polygon" are different
             // claims.**
@@ -246,24 +334,56 @@ struct SkeletonCanvas: View {
             // made hanging look like falling, and made this dot claim something
             // `FallAnalyzer` explicitly refuses to claim: it skips degenerate
             // supports for exactly this reason.
-            if metrics.baseOfSupport.isDegenerate {
+            if !overlays.baseOfSupport {
+                context.fill(ellipse, with: .color(colour))
+                drawComLabel(labelText, at: c, radius: r, colour: colour, in: &context)
+            } else if metrics.baseOfSupport.isDegenerate {
                 // White, over a dark halo. The first version used `.secondary`,
                 // which is a grey chosen to recede against a UI background —
                 // over gym footage of a pale wall it disappeared entirely. The
                 // halo is what keeps it readable on light *and* dark footage,
                 // since this one is drawn over video, not over a diagram.
-                context.stroke(ellipse, with: .color(.black.opacity(0.45)), lineWidth: 5)
+                context.fill(ellipse, with: .color(.black.opacity(0.55)))
                 context.stroke(
                     ellipse,
                     with: .color(.white),
                     style: StrokeStyle(lineWidth: 2.5, dash: [3, 3])
                 )
+                drawComLabel(labelText, at: c, radius: r, colour: .white, in: &context)
             } else if metrics.baseOfSupport.comInside {
                 context.fill(ellipse, with: .color(colour))
+                drawComLabel(labelText, at: c, radius: r, colour: colour, in: &context)
             } else {
-                context.stroke(ellipse, with: .color(.red), lineWidth: 3)
+                context.fill(ellipse, with: .color(.red))
+                drawComLabel(labelText, at: c, radius: r, colour: .red, in: &context)
             }
         }
+    }
+
+    /// Draws the centre-of-mass label immediately above its disc.
+    ///
+    /// It carries a dark outline because it lands on gym footage rather than on
+    /// a filled disc — a pale wall and a green label are the same brightness,
+    /// and without the outline the word disappears exactly where the picture is
+    /// busiest.
+    private func drawComLabel(
+        _ text: Text,
+        at centre: CGPoint,
+        radius: CGFloat,
+        colour: Color,
+        in context: inout GraphicsContext
+    ) {
+        let anchor = CGPoint(x: centre.x, y: centre.y - radius - 3)
+        for dx in [-1.0, 1.0] as [CGFloat] {
+            for dy in [-1.0, 1.0] as [CGFloat] {
+                context.draw(
+                    text.foregroundStyle(.black),
+                    at: CGPoint(x: anchor.x + dx, y: anchor.y + dy),
+                    anchor: .bottom
+                )
+            }
+        }
+        context.draw(text.foregroundStyle(colour), at: anchor, anchor: .bottom)
     }
 
     /// The three reads a coach draws on the body itself: pelvis, plumb line,
@@ -275,7 +395,8 @@ struct SkeletonCanvas: View {
         scale: ClimbScale?,
         colour: Color,
         in context: inout GraphicsContext,
-        size: CGSize
+        size: CGSize,
+        boneWidth: CGFloat
     ) {
         let posture = metrics.posture
 
@@ -289,34 +410,33 @@ struct SkeletonCanvas: View {
             triangle.addLine(to: b)
             triangle.addLine(to: c)
             triangle.closeSubpath()
-            context.fill(triangle, with: .color(colour.opacity(0.18)))
-            context.stroke(triangle, with: .color(colour), lineWidth: 2)
-
-            var hipLine = Path()
-            hipLine.move(to: a)
-            hipLine.addLine(to: b)
-            context.stroke(hipLine, with: .color(.white), lineWidth: 3)
-            context.stroke(hipLine, with: .color(colour), lineWidth: 1.5)
+            context.stroke(
+                triangle,
+                with: .color(colour),
+                style: StrokeStyle(lineWidth: boneWidth * 0.85, lineCap: .round, lineJoin: .round)
+            )
 
             let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
-            var apexLine = Path()
-            apexLine.move(to: mid)
-            apexLine.addLine(to: c)
-            context.stroke(
-                apexLine,
-                with: .color(colour.opacity(0.8)),
-                style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])
-            )
+            if overlays.annotations {
+                var apexLine = Path()
+                apexLine.move(to: mid)
+                apexLine.addLine(to: c)
+                context.stroke(
+                    apexLine,
+                    with: .color(colour.opacity(0.8)),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])
+                )
 
-            var label = String(format: "%.0f° tilt", abs(pelvis.tiltDegrees))
-            if let turn = pelvis.turnDegrees, pelvis.turnConfidence >= 0.3 {
-                label += String(format: " · %.0f° turned", turn)
+                var label = String(format: "%.0f° tilt", abs(pelvis.tiltDegrees))
+                if let turn = pelvis.turnDegrees, pelvis.turnConfidence >= 0.3 {
+                    label += String(format: " · %.0f° turned", turn)
+                }
+                context.draw(
+                    Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(colour),
+                    at: CGPoint(x: max(a.x, b.x) + 4, y: mid.y - 10),
+                    anchor: .leading
+                )
             }
-            context.draw(
-                Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(colour),
-                at: CGPoint(x: max(a.x, b.x) + 4, y: mid.y - 10),
-                anchor: .leading
-            )
         }
 
         if overlays.plumbLine, let pelvis = posture.pelvis,
@@ -339,7 +459,7 @@ struct SkeletonCanvas: View {
                 body.addLine(to: point(shoulderPoint, in: size))
                 context.stroke(body, with: .color(.yellow), lineWidth: 2)
             }
-            if let lean = posture.torsoLeanDegrees, abs(lean) >= 1 {
+            if overlays.annotations, let lean = posture.torsoLeanDegrees, abs(lean) >= 1 {
                 context.draw(
                     Text(String(format: "%.0f° %@", abs(lean), lean > 0 ? "right" : "left"))
                         .font(.system(size: 9, weight: .medium)).foregroundStyle(.yellow),
@@ -370,11 +490,13 @@ struct SkeletonCanvas: View {
                 across.move(to: CGPoint(x: anklePoint.x, y: kneePoint.y))
                 across.addLine(to: kneePoint)
                 context.stroke(across, with: .color(.teal), lineWidth: 2)
-                context.draw(
-                    Text(String(format: "%.2f", abs(offset)))
-                        .font(.system(size: 8)).foregroundStyle(.teal),
-                    at: CGPoint(x: kneePoint.x, y: kneePoint.y - 8)
-                )
+                if overlays.annotations {
+                    context.draw(
+                        Text(String(format: "%.2f", abs(offset)))
+                            .font(.system(size: 8)).foregroundStyle(.teal),
+                        at: CGPoint(x: kneePoint.x, y: kneePoint.y - 8)
+                    )
+                }
             }
         }
     }
@@ -522,17 +644,7 @@ struct SkeletonOverlayPane: View {
                         route: nil,
                         // Holds and the backdrop are forced off here whatever
                         // the toggles say: the wall is in the picture already.
-                        overlays: AnalyticalOverlays(
-                            centreOfMass: overlays.centreOfMass,
-                            baseOfSupport: overlays.baseOfSupport,
-                            limbLoad: overlays.limbLoad,
-                            pelvisTriangle: overlays.pelvisTriangle,
-                            plumbLine: overlays.plumbLine,
-                            kneeLine: overlays.kneeLine,
-                            divergenceVectors: false,
-                            holds: false,
-                            wallBackdrop: false
-                        ),
+                        overlays: overlays.overFootage,
                         // A video cannot be rescaled without distorting it, so
                         // the skeleton is drawn where the joints actually are.
                         normalizeBodyLength: false,

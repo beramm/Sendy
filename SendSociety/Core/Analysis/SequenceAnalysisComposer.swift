@@ -110,7 +110,18 @@ public struct SequenceAnalysis: Sendable, Codable, Hashable, Identifiable {
     public var kind: Kind
     public var observation: String
     public var cause: String?
+    /// The headline measurements — the four most divergent, in rank order.
     public var metrics: [MetricDelta]
+    /// Everything else that was measured reliably here, ranked, with the
+    /// headline four removed. The Results screen keeps this behind a
+    /// disclosure: a coach who reads twelve numbers reads none of them, but
+    /// hiding measurements that exist is not the same as not taking them.
+    public var additionalMetrics: [MetricDelta]
+    /// How many metrics were computed for this sequence but never cleared the
+    /// confidence floor. Reported so an absent metric is distinguishable from
+    /// one that merely ranked low — a silent blank is the failure mode this
+    /// project's fail-soft rule exists to prevent.
+    public var suppressedMetricCount: Int
     public var comparisonIsValid: Bool
     public var numbersUnavailableReason: String?
     /// Paired summaries of the same main difference. Optional so previously
@@ -134,13 +145,17 @@ public struct SequenceAnalysis: Sendable, Codable, Hashable, Identifiable {
         numbersUnavailableReason: String?,
         sourceSectionIndices: [Int],
         referenceFinding: SequenceDifferenceFinding? = nil,
-        attemptFinding: SequenceDifferenceFinding? = nil
+        attemptFinding: SequenceDifferenceFinding? = nil,
+        additionalMetrics: [MetricDelta] = [],
+        suppressedMetricCount: Int = 0
     ) {
         self.sequenceIndex = sequenceIndex
         self.kind = kind
         self.observation = observation
         self.cause = cause
         self.metrics = metrics
+        self.additionalMetrics = additionalMetrics
+        self.suppressedMetricCount = suppressedMetricCount
         self.comparisonIsValid = comparisonIsValid
         self.numbersUnavailableReason = numbersUnavailableReason
         self.sourceSectionIndices = sourceSectionIndices
@@ -207,6 +222,17 @@ public struct SequenceAnalysisComposer: Sendable {
         }
         result.metrics = Array(unique(selectedEvidence + result.metrics).prefix(4))
         if !result.metrics.isEmpty { result.numbersUnavailableReason = nil }
+
+        // The cap is a presentation decision, not a measurement one. Everything
+        // else that was measured reliably is carried through so the Results
+        // sheet can offer it, ranked, without recomputing anything.
+        let headlineKinds = Set(result.metrics.map(\.kind))
+        let pool = unique(comparisonMetrics + aggregateAttemptMetrics(moves))
+        result.additionalMetrics = ranked(pool).filter { !headlineKinds.contains($0.kind) }
+        result.suppressedMetricCount = suppressedMetricKinds(
+            sequenceDelta: sequenceDelta,
+            moves: moves
+        ).count
         return result
     }
 
@@ -928,6 +954,31 @@ public struct SequenceAnalysisComposer: Sendable {
             let rhs = $1.delta == nil ? $1.attemptConfidence : delta.normalizedMagnitude($1)
             return lhs > rhs
         }
+    }
+
+    /// Metrics this sequence produced a value for that never cleared the
+    /// confidence floor, so they were dropped before ranking.
+    ///
+    /// Counted per *kind*, not per sample: a metric that was unreliable in
+    /// every move is one missing measurement from the reader's point of view,
+    /// not seven.
+    private func suppressedMetricKinds(
+        sequenceDelta: SectionDelta?,
+        moves: [SectionDelta]
+    ) -> Set<MetricKind> {
+        let sources = sequenceDelta.map { [$0] } ?? moves
+        var measured: Set<MetricKind> = []
+        var reliable: Set<MetricKind> = []
+        for section in sources {
+            for metric in section.deltas where metric.attempt != nil || metric.reference != nil {
+                measured.insert(metric.kind)
+                if metric.confidence >= config.jointConfidenceFloor
+                    || metric.attemptConfidence >= config.jointConfidenceFloor {
+                    reliable.insert(metric.kind)
+                }
+            }
+        }
+        return measured.subtracting(reliable)
     }
 
     private func unique(_ metrics: [MetricDelta]) -> [MetricDelta] {

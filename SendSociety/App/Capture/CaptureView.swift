@@ -142,7 +142,7 @@ struct CaptureView: View {
                 }
                 .frame(height: 8)
 
-                Text(role == .reference ? "Climber 1 of 2" : "Climber 2 of 2")
+                Text(role == .reference ? "Reference · 1 of 2" : "Attempt · 2 of 2")
                     .font(.system(size: 14, weight: .medium))
             }
             .frame(maxWidth: .infinity, alignment: .leading)

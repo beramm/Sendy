@@ -14,7 +14,14 @@ struct ResultsView: View {
 
     @State private var displayMode: ResultsDisplayMode = .sideBySide
     @State private var skeletonEnabled = false
-    @State private var overlays = AnalyticalOverlays()
+    /// One switch, not six. The skeleton button asks for the body; this asks
+    /// for everything measured about it. Two states are legible standing at a
+    /// wall; a list of six checkboxes is not.
+    @State private var liveAnalytics = false
+    /// Which chip the sequence strip currently holds in its middle. Bound to
+    /// the scroll view, so it tracks a drag as well as a tap.
+    @State private var centredSequence: Int?
+    @State private var sharedVideo: SharedVideo?
     @State private var position = MovePosition()
     @State private var isPlaying = false
     @State private var isScrubbing = false
@@ -83,11 +90,26 @@ struct ResultsView: View {
         .onChange(of: displayMode) { _, mode in
             if mode == .overlay { skeletonEnabled = true }
         }
+        // Live Analytics draws onto the body, so it implies the body. Asking
+        // for it with the skeleton off produced a screen where the switch did
+        // nothing visible in Side by Side.
+        .onChange(of: liveAnalytics) { _, on in
+            if on { skeletonEnabled = true }
+        }
+        // And the implication holds in reverse. Dismissing the skeleton
+        // dismisses everything drawn on it, so a Live Analytics switch left
+        // ticked afterwards is reporting a state the screen is not in.
+        .onChange(of: skeletonEnabled) { _, on in
+            if !on { liveAnalytics = false }
+        }
         .onChange(of: position.sectionIndex) { _, _ in
             isPlaying = false
             position.offset = 0
         }
         .onAppear { clampPosition(to: processed) }
+        .sheet(item: $sharedVideo) { shared in
+            VideoShareSheet(url: shared.url)
+        }
     }
 
     private var header: some View {
@@ -162,12 +184,38 @@ struct ResultsView: View {
                 .accessibilityValue(skeletonIsActive ? "On" : "Off")
 
                 Menu {
-                    Toggle("Centre of mass", isOn: $overlays.centreOfMass)
-                    Toggle("Base of support", isOn: $overlays.baseOfSupport)
-                    Toggle("Limb load", isOn: $overlays.limbLoad)
-                    Toggle("Pelvis triangle", isOn: $overlays.pelvisTriangle)
-                    Toggle("Plumb line", isOn: $overlays.plumbLine)
-                    Toggle("Knee over toe", isOn: $overlays.kneeLine)
+                    Toggle(isOn: $liveAnalytics) {
+                        Label("Show Live Analytics", systemImage: "chart.xyaxis.line")
+                    }
+                    // The clip as imported, handed to the share sheet — which
+                    // carries "Save Video" for Photos, so it covers getting
+                    // footage off the phone without the app asking for library
+                    // write access of its own.
+                    Button {
+                        share(model.processed?.session.reference)
+                    } label: {
+                        Label {
+                            Text("Export ")
+                                + Text("REF").foregroundColor(ResultsStyle.reference)
+                                + Text(" Video")
+                        } icon: {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                    }
+                    .disabled(model.processed?.session.reference == nil)
+
+                    Button {
+                        share(model.processed?.attempt)
+                    } label: {
+                        Label {
+                            Text("Export ")
+                                + Text("YOU").foregroundColor(ResultsStyle.attempt)
+                                + Text(" Video")
+                        } icon: {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                    }
+                    .disabled(model.processed?.attempt == nil)
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 18, weight: .bold))
@@ -198,8 +246,12 @@ struct ResultsView: View {
                     attemptMetrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
                     referenceScale: processed.referenceScale,
                     attemptScale: processed.attemptScale,
-                    route: processed.route,
-                    overlays: overlays,
+                    // No route, and holds forced off whatever the toggles
+                    // say — the same call `SkeletonOverlayPane` makes, for the
+                    // same reason: the wall plate is in the picture already,
+                    // and numbered circles drawn over real holds are noise.
+                    route: nil,
+                    overlays: overlays.withoutHolds,
                     // Overlay is spatial evidence, so retain each climber's tracked
                     // size instead of normalizing both bodies to one torso length.
                     normalizeBodyLength: false,
@@ -298,17 +350,17 @@ struct ResultsView: View {
             .disabled(position.sectionIndex == 0)
 
             GeometryReader { geometry in
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(sequences) { sequence in
-                            let selected = sequence.index == position.sectionIndex
-                            let containsFall = sequenceContainsFall(sequence, processed: processed)
-                            let hasDifferentMoveCount = sequence.moveCountDelta != 0
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(sequences) { sequence in
+                                let selected = sequence.index == position.sectionIndex
+                                let containsFall = sequenceContainsFall(sequence, processed: processed)
+                                let hasDifferentMoveCount = sequence.moveCountDelta != 0
 
-                            Button {
-                                selectSequence(sequence.index, processed: processed)
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
+                                Button {
+                                    selectSequence(sequence.index, processed: processed)
+                                } label: {
                                     Text("\(sequence.index + 1)")
                                         .font(.system(
                                             size: 17,
@@ -316,49 +368,110 @@ struct ResultsView: View {
                                             design: .monospaced
                                         ))
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                                    if containsFall {
-                                        Text("F")
-                                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                                            .padding(6)
-                                    }
+                                        .foregroundStyle(sequenceForeground(
+                                            containsFall: containsFall,
+                                            hasDifferentMoveCount: hasDifferentMoveCount
+                                        ))
+                                        .frame(
+                                            width: sequenceButtonWidth(
+                                                selected: selected,
+                                                hasDifferentMoveCount: hasDifferentMoveCount
+                                            ),
+                                            height: selected ? 48 : 40
+                                        )
+                                        .background(
+                                            sequenceBackground(
+                                                containsFall: containsFall,
+                                                hasDifferentMoveCount: hasDifferentMoveCount
+                                            ),
+                                            in: .rect(cornerRadius: 15)
+                                        )
+                                        .animation(.snappy(duration: 0.2), value: selected)
                                 }
-                                .foregroundStyle(sequenceForeground(
-                                    selected: selected,
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Sequence \(sequence.index + 1) of \(sequences.count)")
+                                .accessibilityValue(sequenceAccessibilityValue(
                                     containsFall: containsFall,
                                     hasDifferentMoveCount: hasDifferentMoveCount
                                 ))
-                                .frame(
-                                    width: sequenceButtonWidth(
-                                        selected: selected,
-                                        hasDifferentMoveCount: hasDifferentMoveCount
-                                    ),
-                                    height: selected ? 48 : 40
-                                )
-                                .background(
-                                    sequenceBackground(
-                                        selected: selected,
-                                        containsFall: containsFall,
-                                        hasDifferentMoveCount: hasDifferentMoveCount
-                                    ),
-                                    in: .rect(cornerRadius: 15)
-                                )
-                                .animation(.snappy(duration: 0.2), value: selected)
+                                .accessibilityAddTraits(selected ? .isSelected : [])
+                                .id(sequence.index)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Sequence \(sequence.index + 1) of \(sequences.count)")
-                            .accessibilityValue(sequenceAccessibilityValue(
-                                containsFall: containsFall,
-                                hasDifferentMoveCount: hasDifferentMoveCount
-                            ))
-                            .accessibilityAddTraits(selected ? .isSelected : [])
+                        }
+                        .frame(minHeight: 52)
+                        .scrollTargetLayout()
+                    }
+                    .scrollIndicators(.hidden)
+                    // Half a pane of empty space at each end, so *every* chip
+                    // can reach the middle. Without it a scroll can centre the
+                    // interior of the list and nothing else: there is no
+                    // content to the left of the first chip or the right of the
+                    // last, so those two stay pinned to their edge — and
+                    // sequence 1 is exactly where every run starts. As a
+                    // content margin rather than padding on the stack, so
+                    // `viewAligned` snapping measures from it and a chip comes
+                    // to rest in the middle instead of against the edge.
+                    .contentMargins(
+                        .horizontal,
+                        max(0, geometry.size.width / 2 - 36),
+                        for: .scrollContent
+                    )
+                    // The strip is a picker, not a filmstrip: it settles on a
+                    // chip rather than between two.
+                    .scrollTargetBehavior(.viewAligned)
+                    // **Scrolling selects.** Dragging a chip to the middle and
+                    // having nothing happen is the bug this closes — the middle
+                    // is where selection is *shown*, so it has to be where
+                    // selection is *made* too.
+                    .scrollPosition(id: $centredSequence, anchor: .center)
+                    .onChange(of: centredSequence) { _, id in
+                        guard let id, id != position.sectionIndex else { return }
+                        selectSequence(id, processed: processed)
+                    }
+                    // Fade the strip out at both ends instead of letting the
+                    // scroll view guillotine a chip mid-digit. The half-pane
+                    // insets guarantee there is always more list past the edge,
+                    // so something is always being cut — a chip dissolving into
+                    // the background reads as "the list continues", where a
+                    // hard vertical slice through a number reads as a layout
+                    // bug.
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.07),
+                                .init(color: .black, location: 0.93),
+                                .init(color: .clear, location: 1)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    // Selection is marked by position, not by colour: the chosen
+                    // chip slides to the middle. Matched to the chip's own
+                    // `.snappy(duration: 0.2)` so growing and sliding read as one
+                    // movement.
+                    // Only for selections the scroll did not make itself —
+                    // a tap or a chevron. Without the guard the two directions
+                    // fight: a drag reports a new centre, that sets the
+                    // selection, and the selection scrolls the strip out from
+                    // under the finger that is still on it.
+                    .onChange(of: position.sectionIndex) { _, index in
+                        guard centredSequence != index else { return }
+                        withAnimation(.snappy(duration: 0.2)) {
+                            proxy.scrollTo(index, anchor: .center)
                         }
                     }
-                    // Center short lists instead of pinning them to the leading
-                    // edge. Longer lists retain their intrinsic width and scroll.
-                    .frame(minWidth: geometry.size.width, minHeight: 52, alignment: .center)
+                    // A screen entered on a mid-list sequence starts centered
+                    // rather than scrolling into place after the fact. `task`
+                    // rather than `onAppear`: the first layout pass has not
+                    // placed the chips yet when `onAppear` fires, so the scroll
+                    // lands on nothing and sequence 1 stays at the leading edge.
+                    .task {
+                        centredSequence = position.sectionIndex
+                        proxy.scrollTo(position.sectionIndex, anchor: .center)
+                    }
                 }
-                .scrollIndicators(.hidden)
             }
             .frame(height: 52)
 
@@ -369,6 +482,11 @@ struct ResultsView: View {
             .buttonStyle(.plain)
             .disabled(position.sectionIndex >= sequences.count - 1)
         }
+        // A detent tick as each chip passes through the middle. Triggered off
+        // the centred chip rather than off `position`, so the feedback lands
+        // with the movement under the finger rather than after the selection it
+        // causes — and so a flick across several sequences ticks for each one.
+        .sensoryFeedback(.selection, trigger: centredSequence)
     }
 
     private var playbackControls: some View {
@@ -459,12 +577,12 @@ struct ResultsView: View {
             Spacer(minLength: 0)
 
             Text(sentence)
-            .font(.system(size: 18, weight: .bold))
+            .font(.system(size: 16, weight: .medium))
             .foregroundStyle(resolved.isAvailable ? Color.white : ResultsStyle.secondaryText)
-            .multilineTextAlignment(.center)
+            .multilineTextAlignment(.leading)
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
         }
@@ -522,6 +640,10 @@ struct ResultsView: View {
         }
     }
 
+    private var overlays: AnalyticalOverlays {
+        liveAnalytics ? .live : .clean
+    }
+
     private var skeletonIsActive: Bool {
         displayMode == .overlay || skeletonEnabled
     }
@@ -532,12 +654,11 @@ struct ResultsView: View {
     }
 
     private func sequenceBackground(
-        selected: Bool,
         containsFall: Bool,
         hasDifferentMoveCount: Bool
     ) -> Color {
         if containsFall { return .red }
-        if selected || hasDifferentMoveCount { return AppTheme.accent }
+        if hasDifferentMoveCount { return AppTheme.accent }
         return ResultsStyle.panelSurface
     }
 
@@ -551,12 +672,11 @@ struct ResultsView: View {
     }
 
     private func sequenceForeground(
-        selected: Bool,
         containsFall: Bool,
         hasDifferentMoveCount: Bool
     ) -> Color {
         if containsFall { return .white }
-        if selected || hasDifferentMoveCount { return AppTheme.background }
+        if hasDifferentMoveCount { return AppTheme.background }
         return ResultsStyle.secondaryText
     }
 
@@ -593,6 +713,19 @@ struct ResultsView: View {
         return range.lowerBound + Int(
             (Double(range.count - 1) * offset.clamped(to: 0 ... 1)).rounded()
         )
+    }
+
+    /// Resolves a clip's on-disk location and hands it to the share sheet.
+    ///
+    /// The lookup is asynchronous, so the sheet is driven by the resolved URL
+    /// rather than presented first and filled in later — a share sheet that
+    /// opens on nothing is worse than one that opens a moment after the tap.
+    private func share(_ video: VideoRef?) {
+        guard let video else { return }
+        Task {
+            guard let url = await model.videoURL(video) else { return }
+            sharedVideo = SharedVideo(url: url)
+        }
     }
 
     private func selectSequence(_ index: Int, processed: ProcessedSession) {
