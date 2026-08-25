@@ -20,8 +20,6 @@ struct ShakeOnboardingPage: View {
     @State private var isPlayingExit = false
     @State private var frozenClimberTranslation = CGSize.zero
     @State private var frozenClimberRotation = 0.0
-    @State private var frozenWaveTranslation = CGSize.zero
-    @State private var frozenWaveRotation = 0.0
     @State private var fallOffset = CGSize.zero
     @State private var fallRotation = 0.0
     @State private var climberExitOpacity = 1.0
@@ -111,11 +109,7 @@ struct ShakeOnboardingPage: View {
 
             motionWaves
                 .frame(width: 402, height: 874, alignment: .topLeading)
-                .offset(
-                    x: waveShakeTranslation.width,
-                    y: waveShakeTranslation.height + supportingContentOffset
-                )
-                .rotationEffect(.degrees(waveShakeRotation), anchor: .center)
+                .offset(y: supportingContentOffset)
                 .opacity(
                     (usesWelcomeEntrance ? motionWavesOpacity : 1)
                         * supportingContentOpacity
@@ -144,13 +138,6 @@ struct ShakeOnboardingPage: View {
         }
     }
 
-    private var motionWavesFollowClimber: Bool {
-        switch OnboardingConfiguration.motionWaveMovement {
-        case .shakeWithClimber: true
-        case .stationary: false
-        }
-    }
-
     private var climberShakeTranslation: CGSize {
         if isPlayingExit { return frozenClimberTranslation }
         return motion.visualTranslation
@@ -159,20 +146,6 @@ struct ShakeOnboardingPage: View {
     private var climberShakeRotation: Double {
         if isPlayingExit { return frozenClimberRotation }
         return motion.visualRotation
-    }
-
-    private var waveShakeTranslation: CGSize {
-        if isPlayingExit { return frozenWaveTranslation }
-        return motionWavesFollowClimber
-            ? motion.visualTranslation
-            : .zero
-    }
-
-    private var waveShakeRotation: Double {
-        if isPlayingExit { return frozenWaveRotation }
-        return motionWavesFollowClimber
-            ? motion.visualRotation
-            : 0
     }
 
     private func playEntranceIfNeeded() async {
@@ -222,8 +195,6 @@ struct ShakeOnboardingPage: View {
 
         frozenClimberTranslation = motion.visualTranslation
         frozenClimberRotation = motion.visualRotation
-        frozenWaveTranslation = motionWavesFollowClimber ? motion.visualTranslation : .zero
-        frozenWaveRotation = motionWavesFollowClimber ? motion.visualRotation : 0
         motion.disarmShakeDetection()
         motion.stop()
         isPlayingExit = true

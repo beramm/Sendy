@@ -190,26 +190,18 @@ struct SessionSetupView: View {
     }
 
     private var compareButton: some View {
-        Button {
-            model.process()
-            if model.path.last != .processing { model.path.append(.processing) }
-        } label: {
-            Text("Compare")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(
-                    model.canProcess ? AppTheme.background : Color.secondary
-                )
-                .frame(maxWidth: .infinity, minHeight: 52)
-                .background(
-                    model.canProcess
-                        ? AppTheme.accent : AppTheme.accent.opacity(0.16),
-                    in: .capsule
-                )
-                .glassEffect(.regular.interactive(), in: .capsule)
-        }
-        .buttonStyle(.plain)
-        .disabled(!model.canProcess)
-        .accessibilityHint(model.blockedReason ?? "Starts the comparison")
+        PrimaryButton(
+            title: "Compare",
+            isEnabled: model.canProcess,
+            disabledHint: model.blockedReason ?? "Starts the comparison",
+            action: {
+                model.process()
+                if model.path.last != .processing {
+                    model.path.append(.processing)
+                }
+            }
+        )
+        .frame(maxWidth: .infinity)
     }
 
     private func play(_ video: VideoRef) {

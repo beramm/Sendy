@@ -86,21 +86,14 @@ final class OnboardingMotionController {
     /// “Shake” command as well as with physical Core Motion samples.
     func registerSystemShake() {
         guard isShakeDetectionArmed, Date() >= acceptShakeAfter else { return }
-        switch OnboardingConfiguration.shakeTriggerMode {
-        case .accelerationThreshold:
-            registerShakeIfReady()
-        case .sustainedDuration:
-            // Simulator has no continuous Core Motion samples. Treat its Shake
-            // command as a simulated sustained shake with the same duration.
-            guard !isMotionAvailable else { return }
-            simulatedSustainedShakeTask?.cancel()
-            simulatedSustainedShakeTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(
-                    for: .seconds(OnboardingConfiguration.sustainedShakeDuration)
-                )
-                guard !Task.isCancelled else { return }
-                self?.registerShakeIfReady()
-            }
+        // Simulator has no continuous Core Motion samples. Treat its Shake
+        // command as the current one-second sustained shake interaction.
+        guard !isMotionAvailable else { return }
+        simulatedSustainedShakeTask?.cancel()
+        simulatedSustainedShakeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.registerShakeIfReady()
         }
     }
 
@@ -141,20 +134,11 @@ final class OnboardingMotionController {
     private func consume(_ sample: MotionSample) {
         let horizontalMovement = Self.clamp(sample.accelerationX * 42, to: -32 ... 32)
         let verticalMovement = Self.clamp(-sample.accelerationY * 42, to: -32 ... 32)
-        visualTranslation = switch OnboardingConfiguration.shakeMovement {
-        case .horizontal:
-            CGSize(width: horizontalMovement, height: 0)
-        case .vertical:
-            CGSize(width: 0, height: verticalMovement)
-        case .both:
-            CGSize(width: horizontalMovement, height: verticalMovement)
-        }
-        visualRotation = switch OnboardingConfiguration.shakeRotation {
-        case .on:
-            Self.clamp(sample.accelerationX * 15, to: -14 ... 14)
-        case .off:
-            0
-        }
+        visualTranslation = CGSize(
+            width: horizontalMovement,
+            height: verticalMovement
+        )
+        visualRotation = 0
 
         let acceleration = sqrt(
             sample.accelerationX * sample.accelerationX
@@ -200,15 +184,7 @@ final class OnboardingMotionController {
     private func evaluateShakeTrigger(for acceleration: Double) {
         let now = Date()
         guard isShakeDetectionArmed, now >= acceptShakeAfter else { return }
-
-        switch OnboardingConfiguration.shakeTriggerMode {
-        case .accelerationThreshold:
-            if acceleration > 0.72 {
-                registerShakeIfReady()
-            }
-        case .sustainedDuration:
-            updateSustainedShakeProgress(acceleration: acceleration, now: now)
-        }
+        updateSustainedShakeProgress(acceleration: acceleration, now: now)
     }
 
     private func updateSustainedShakeProgress(acceleration: Double, now: Date) {
@@ -225,8 +201,7 @@ final class OnboardingMotionController {
             lastSustainedShakeActivityAt = now
 
             if let startedAt = sustainedShakeStartedAt,
-               now.timeIntervalSince(startedAt)
-                   >= OnboardingConfiguration.sustainedShakeDuration {
+               now.timeIntervalSince(startedAt) >= 1 {
                 resetSustainedShakeProgress()
                 registerShakeIfReady()
             }
