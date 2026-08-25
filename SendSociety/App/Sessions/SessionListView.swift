@@ -14,38 +14,9 @@ struct SessionListView: View {
             AppBackground()
             VStack(alignment: .leading, spacing: 24) {
                 HStack {
-                    Text("My Climbs")
-                        .font(.system(size: 34, weight: .bold, design: .monospaced))
+                    Text("Sessions")
+                        .font(.system(size: 40, weight: .bold))
                     Spacer()
-                    if !model.sessions.isEmpty {
-                        Button {
-                            // nil, so the model names it: by date now, and by
-                            // the gym once a located clip lands.
-                            Task { await model.newSession(name: nil) }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 24, weight: .medium))
-                                .frame(width: 50, height: 50)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .background(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: Color(red: 0.737, green: 0.969, blue: 0), location: 0.45),
-                                    .init(color: Color(red: 0.431, green: 0.569, blue: 0), location: 0.98),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            in: Circle()
-                        )
-                        .glassEffect(
-                            .regular.interactive(),
-                            in: Circle()
-                        )
-                        .accessibilityLabel("New session")
-                    }
                 }
                 .padding(.horizontal, 20)
 
@@ -65,22 +36,10 @@ struct SessionListView: View {
                         }
                         .padding(.vertical, 40)
                         
-                        Button {
+                        PrimaryButton(title: "Compare now") {
                             // nil, so the model names it: by date now, and by
                             // the gym once a located clip lands.
                             Task { await model.newSession(name: nil) }
-                        } label: {
-                            Text("Compare now")
-                                // .title2 instead of a fixed 24pt so the label grows with
-                                // the user's preferred text size.
-                                .font(.system(.title3, weight: .black))
-                                .foregroundStyle(AppTheme.background)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                                .padding(.horizontal, 24)
-                                .frame(minWidth: 313, minHeight: 59)
-                                .background(AppTheme.accent, in: Capsule())
-                                .glassEffect()
                         }
                         Spacer()
                     }
@@ -94,6 +53,49 @@ struct SessionListView: View {
                 }
             }
             .padding(.top, 12)
+
+            if !model.sessions.isEmpty {
+                Button {
+                    // nil, so the model names it: by date now, and by
+                    // the gym once a located clip lands.
+                    Task { await model.newSession(name: nil) }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(AppTheme.background)
+                        .frame(width: 64, height: 64)
+                        .background(
+                            RadialGradient(
+                                colors: [
+                                    Color(
+                                        red: 188.0 / 255.0,
+                                        green: 247.0 / 255.0,
+                                        blue: 0
+                                    ),
+                                    Color(
+                                        red: 234.0 / 255.0,
+                                        green: 250.0 / 255.0,
+                                        blue: 182.0 / 255.0
+                                    ),
+                                ],
+                                center: .leading,
+                                startRadius: 0,
+                                endRadius: 64
+                            ),
+                            in: Circle()
+                        )
+                }
+                .buttonStyle(.plain)
+                .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
+                .accessibilityLabel("New session")
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .bottomTrailing
+                )
+            }
         }
         .foregroundStyle(.white)
         .navigationTitle("")
@@ -156,6 +158,7 @@ struct SessionListView: View {
         .scrollContentBackground(.hidden)
         .scrollIndicators(.hidden)
         .contentMargins(.top, 0, for: .scrollContent)
+        .contentMargins(.bottom, 88, for: .scrollContent)
         .frame(minHeight: 260)
     }
 

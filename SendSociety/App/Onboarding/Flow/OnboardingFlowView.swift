@@ -1,71 +1,15 @@
 import SwiftUI
 
-enum OnboardingShakeMovement {
-    case horizontal
-    case vertical
-    case both
-}
-
-enum OnboardingShakeRotation {
-    case on
-    case off
-}
-
-enum OnboardingShakeTriggerMode {
-    case accelerationThreshold
-    case sustainedDuration
-}
-
-enum OnboardingMotionWaveMovement {
-    case shakeWithClimber
-    case stationary
-}
-
 enum OnboardingConfiguration {
-    /// Forces onboarding even though it has already been completed.
-    ///
-    /// **Opt-in, never on by default.** Onboarding is a first-install
-    /// experience: once `hasCompletedOnboarding` is set it stays set for the
-    /// life of the install, across relaunches and app updates, and is cleared
-    /// only by deleting the app. A debug build that showed it on every launch
-    /// made that impossible to verify — the persisted path never ran during
-    /// development, which is the one place it would have been noticed if it
-    /// were broken.
-    ///
-    /// Pass `--show-onboarding` in the scheme's launch arguments to see the
-    /// flow again without deleting the app or editing this file:
-    ///
-    ///     xcrun simctl launch <device> <bundle-id> --show-onboarding
-    static let alwaysShowOnLaunch = false
-
-
-    /// Development switch for testing the artwork's shake direction.
-    /// Change this to `.horizontal`, `.vertical`, or `.both`.
-    static let shakeMovement: OnboardingShakeMovement = .both
-
-    /// Development switch for testing rotation during the shake animation.
-    /// Change this to `.on` or `.off`.
-    static let shakeRotation: OnboardingShakeRotation = .off
-
-    /// Development switch for deciding when a shake completes the page.
-    /// Use `.accelerationThreshold` for one hard shake or `.sustainedDuration`
-    /// to require continuous shaking for `sustainedShakeDuration` seconds.
-    static let shakeTriggerMode: OnboardingShakeTriggerMode = .sustainedDuration
-    static let sustainedShakeDuration: TimeInterval = 1
-
-    /// Development switch for testing whether the motion waves also shake.
-    /// Change this to `.shakeWithClimber` or `.stationary`.
-    static let motionWaveMovement: OnboardingMotionWaveMovement = .stationary
+    static let alwaysShowOnLaunch = true
 }
 
 enum OnboardingStep: Int, CaseIterable {
     case welcome
-    case setup
-    case goClimb
-    case betterClimber
-    case analyze
-    case alignRoute
-    case loading
+    case levelUp
+    case moveBetter
+    case sideBySide
+    case ready
 }
 
 struct OnboardingFlowView: View {
@@ -95,6 +39,18 @@ struct OnboardingFlowView: View {
             page
                 .id(step)
 
+            if let completedSteps {
+                OnboardingDesignCanvas {
+                    ZStack(alignment: .topLeading) {
+                        OnboardingProgressIndicator(
+                            completedSteps: completedSteps
+                        )
+                        .offset(x: 45, y: 61)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+
             DeviceShakeDetector {
                 motion.registerSystemShake()
             }
@@ -114,6 +70,15 @@ struct OnboardingFlowView: View {
         }
     }
 
+    private var completedSteps: Int? {
+        switch step {
+        case .welcome, .ready: nil
+        case .levelUp: 1
+        case .moveBetter: 2
+        case .sideBySide: 3
+        }
+    }
+
     @ViewBuilder
     private var page: some View {
         switch step {
@@ -126,24 +91,14 @@ struct OnboardingFlowView: View {
                 },
                 onCompleted: advance
             )
-        case .setup:
-            SetupOnboardingPage(action: advance)
-        case .goClimb:
-            GoClimbOnboardingPage(action: advance)
-        case .betterClimber:
-            BetterClimberOnboardingPage(action: advance)
-        case .analyze:
-            AnalyzeOnboardingPage(action: advance)
-        case .alignRoute:
-            AlignRouteOnboardingPage(motion: motion, action: advance)
-        case .loading:
-            LoadingOnboardingPage(
-                motion: motion,
-                onEntranceCompleted: {
-                    motion.armShakeDetection()
-                },
-                onCompleted: advance
-            )
+        case .levelUp:
+            LevelUpOnboardingPage(action: advance)
+        case .moveBetter:
+            MoveBetterOnboardingPage(action: advance)
+        case .sideBySide:
+            SideBySideOnboardingPage(action: advance)
+        case .ready:
+            ReadyOnboardingPage(action: advance)
         }
     }
 
@@ -151,14 +106,6 @@ struct OnboardingFlowView: View {
         if newStep == .welcome {
             motion.finishAlignment()
             motion.pauseForEntrance()
-        } else if newStep == .loading {
-            motion.start()
-            motion.finishAlignment()
-            motion.disarmShakeDetection()
-        } else if newStep == .alignRoute {
-            motion.start()
-            motion.disarmShakeDetection()
-            motion.prepareForAlignment()
         } else {
             motion.disarmShakeDetection()
             motion.finishAlignment()
@@ -168,8 +115,6 @@ struct OnboardingFlowView: View {
 
     private func advance() {
         guard !isAdvancing else { return }
-        if step == .alignRoute, !motion.isAligned { return }
-
         isAdvancing = true
         guard let nextStep = OnboardingStep(rawValue: step.rawValue + 1) else {
             onFinished()
