@@ -106,6 +106,40 @@ struct ProcessingTests {
         #expect(!result.warnings.isEmpty)
     }
 
+    @Test("A completed result cache restores generated analytics")
+    func completedResultCacheRoundTrips() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var session = try await makeSession(store: store)
+        let spy = SpyExtractor(
+            reference: SyntheticClimb.climb(moves: 4),
+            attempt: SyntheticClimb.climb(moves: 4, speedFactor: 1.25)
+        )
+        let result = try await ProcessingPipeline(
+            store: store,
+            extractor: spy,
+            analysisProvider: TemplateAnalysisProvider()
+        ).process(session: session, config: TuningConfig())
+
+        session.name = "Saved Project"
+        session.grade = .v5
+        var completed = result
+        completed.session = session
+        try await store.cacheProcessed(completed, session: session)
+        try await store.save(session)
+
+        let restored = try #require(await store.cachedProcessed(session: session))
+        #expect(restored.session.name == "Saved Project")
+        #expect(restored.session.grade == .v5)
+        #expect(restored.analyses == result.analyses)
+        #expect(restored.sequenceAnalyses == result.sequenceAnalyses)
+        #expect(restored.fallAnalysis == result.fallAnalysis)
+        #expect(restored.stages == result.stages)
+        #expect(spy.calls == 2, "loading the result must not invoke pose extraction")
+    }
+
     @Test("Progress reports every stage in order")
     func progressReporting() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
