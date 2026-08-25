@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 /// ```
 /// Sessions/<session-uuid>/
 ///   session.json
+///   processed.json                 ← the completed analytics/result cache
 ///   videos/<video-uuid>.mov
 ///   poses/<video-uuid>.json      ← the pose cache
 ///   plates/<video-uuid>-<key>.png ← the wall backdrop
@@ -87,11 +88,25 @@ public actor SessionStore {
 
     // MARK: Sessions
 
-    public func create(name: String) throws -> ClimbSession {
+    /// Creates the working directory for an unsaved climb. It deliberately
+    /// does not write `session.json`, so `listSessions()` cannot expose a climb
+    /// before the user confirms its title and grade in Results.
+    public func createDraft(name: String) throws -> ClimbSession {
         let session = ClimbSession(name: name)
         let dir = directory(for: session.id)
-        try FileManager.default.createDirectory(at: dir.appendingPathComponent("videos"), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: dir.appendingPathComponent("poses"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("videos"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("poses"),
+            withIntermediateDirectories: true
+        )
+        return session
+    }
+
+    public func create(name: String) throws -> ClimbSession {
+        let session = try createDraft(name: name)
         try save(session)
         return session
     }
@@ -119,6 +134,60 @@ public actor SessionStore {
 
     public func delete(id: UUID) {
         try? FileManager.default.removeItem(at: directory(for: id))
+    }
+
+    // MARK: Completed result cache
+
+    private func processedURL(session: ClimbSession) -> URL {
+        directory(for: session.id).appendingPathComponent("processed.json")
+    }
+
+    /// Saves the complete result except for the wall-plate bitmap, which
+    /// already has its own keyed PNG cache. Non-finite alignment diagnostics
+    /// are represented as strings so a failed registration remains cacheable.
+    public func cacheProcessed(_ processed: ProcessedSession, session: ClimbSession) throws {
+        let url = processedURL(session: session)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
+        try encoder.encode(processed).write(to: url, options: .atomic)
+    }
+
+    /// Restores a saved result without running pose extraction, metrics, or an
+    /// analysis provider. The current session metadata wins over the copy in
+    /// the cache so later title/grade edits cannot go stale.
+    public func cachedProcessed(session: ClimbSession) -> ProcessedSession? {
+        let url = processedURL(session: session)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "Infinity",
+            negativeInfinity: "-Infinity",
+            nan: "NaN"
+        )
+        guard var processed = try? decoder.decode(ProcessedSession.self, from: data) else {
+            return nil
+        }
+        processed.session = session
+        if let reference = session.reference {
+            processed.wallPlate = cachedPlate(
+                session: session,
+                video: reference,
+                config: processed.config
+            )
+        }
+        return processed
+    }
+
+    public func removeCachedProcessed(session: ClimbSession) {
+        try? FileManager.default.removeItem(at: processedURL(session: session))
     }
 
     /// Copies a video into the session directory and returns its ref.

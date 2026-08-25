@@ -76,6 +76,9 @@ final class AppModel {
     /// Where the current session's name came from, so the clips screen can say
     /// so plainly. `.date` is stated, never apologised for.
     var sessionNameSource: SessionNameSource = .date
+    /// A new climb owns a working directory for its clips and caches, but does
+    /// not become a saved/listed session until Save Climb is confirmed.
+    private(set) var sessionIsDraft = false
 
     private var processingTask: Task<Void, Never>?
     private let videoLocationReader = VideoLocationReader()
@@ -144,7 +147,10 @@ final class AppModel {
     func setPoseSource(_ source: PoseSource) async {
         guard var current = session, current.poseSource != source else { return }
         current.poseSource = source
-        try? await store.save(current)
+        if !sessionIsDraft {
+            try? await store.save(current)
+            await store.removeCachedProcessed(session: current)
+        }
         session = current
         processed = nil
         state = .idle
@@ -165,10 +171,13 @@ final class AppModel {
             ? SessionNamer.dateName(Date())
             : ResolvedSessionName(name: typed, source: .user)
         do {
-            var created = try await store.create(name: resolved.name)
+            if sessionIsDraft, let abandoned = session {
+                await store.delete(id: abandoned.id)
+            }
+            var created = try await store.createDraft(name: resolved.name)
             created.nameSource = resolved.source
-            try await store.save(created)
             session = created
+            sessionIsDraft = true
             sessionNameSource = created.nameSource
             config = created.config
             processed = nil
@@ -182,21 +191,31 @@ final class AppModel {
         }
     }
 
-    func open(_ s: ClimbSession) {
+    func open(_ s: ClimbSession) async {
         session = s
+        sessionIsDraft = false
         sessionNameSource = s.nameSource
         config = s.config
-        processed = nil
-        state = .idle
         attemptIndex = 0
         clearImportStates()
-        path = [.setup]
+        if let cached = await store.cachedProcessed(session: s) {
+            processed = cached
+            attemptIndex = cached.attemptIndex
+            state = .done
+            analysisProviderName = cached.analyses.first?.source ?? "Saved analysis"
+            path = [.results]
+        } else {
+            processed = nil
+            state = .idle
+            path = [.setup]
+        }
     }
 
     func delete(_ s: ClimbSession) async {
         await store.delete(id: s.id)
         if session?.id == s.id {
             session = nil
+            sessionIsDraft = false
             processed = nil
             state = .idle
             clearImportStates()
@@ -328,10 +347,10 @@ final class AppModel {
             current.addAttempt(ref)
         }
         await resolveName(of: &current, using: ref)
-        try await store.save(current)
+        if !sessionIsDraft { try await store.save(current) }
         session = current
         sessionNameSource = current.nameSource
-        invalidateResults()
+        await invalidateResults()
         await refresh()
     }
 
@@ -364,10 +383,10 @@ final class AppModel {
             current.attempts[index] = replacement
         }
 
-        try await store.save(current)
+        if !sessionIsDraft { try await store.save(current) }
         await store.removeVideo(session: current, video: original)
         session = current
-        invalidateResults()
+        await invalidateResults()
         await refresh()
     }
 
@@ -462,7 +481,7 @@ final class AppModel {
             )
         }
         do {
-            try await store.save(current)
+            if !sessionIsDraft { try await store.save(current) }
             session = current
             sessionNameSource = current.nameSource
             await refresh()
@@ -483,10 +502,10 @@ final class AppModel {
             current.attempts.removeAll { $0.id == ref.id }
         }
         do {
-            try await store.save(current)
+            if !sessionIsDraft { try await store.save(current) }
             session = current
             attemptIndex = min(attemptIndex, max(0, current.attempts.count - 1))
-            invalidateResults()
+            await invalidateResults()
             await refresh()
         } catch {
             lastError = error.localizedDescription
@@ -494,7 +513,10 @@ final class AppModel {
     }
 
     /// The clips changed, so anything computed from them is stale.
-    private func invalidateResults() {
+    private func invalidateResults() async {
+        if !sessionIsDraft, let session {
+            await store.removeCachedProcessed(session: session)
+        }
         processed = nil
         state = .idle
         path.removeAll { $0 == .results || $0 == .report }
@@ -555,7 +577,6 @@ final class AppModel {
                 self.analysisProviderName = result.analyses.first?.source ?? "Template"
                 var updated = session
                 updated.config = config
-                try? await self.store.save(updated)
                 self.session = updated
             } catch is CancellationError {
                 self.state = .idle
@@ -632,7 +653,10 @@ final class AppModel {
             return h
         }
         current.manualRouteOverride = corrected
-        try? await store.save(current)
+        if !sessionIsDraft {
+            try? await store.save(current)
+            await store.removeCachedProcessed(session: current)
+        }
         session = current
         process()
     }
@@ -640,9 +664,64 @@ final class AppModel {
     func clearManualRoute() async {
         guard var current = session else { return }
         current.manualRouteOverride = nil
-        try? await store.save(current)
+        if !sessionIsDraft {
+            try? await store.save(current)
+            await store.removeCachedProcessed(session: current)
+        }
         session = current
         process()
+    }
+
+    // MARK: Final save
+
+    /// Commits the result only after the climber confirms the title and grade.
+    /// The completed analytics are written before `session.json`, so a draft
+    /// cannot appear in the Sessions list without a restorable result beside
+    /// it. Returns true when Results may dismiss back to the list.
+    func saveClimb(title: String, grade: ClimbGrade) async -> Bool {
+        guard var current = session, var completed = processed else {
+            lastError = "There is no completed comparison to save."
+            return false
+        }
+
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            lastError = "Enter a climb name before saving."
+            return false
+        }
+
+        current.name = trimmed
+        current.nameSource = .user
+        current.grade = grade
+        current.config = config
+        completed.session = current
+        completed.config = config
+
+        do {
+            // The model-generated findings live inside `completed`. Reopening
+            // reads this cache directly and never asks Foundation Models again.
+            try await store.cacheProcessed(completed, session: current)
+            try await store.save(current)
+            if let coordinate = current.coordinate {
+                await store.rememberPlacemark(
+                    name: SessionNamer.placeComponent(of: trimmed),
+                    at: coordinate,
+                    confirmedByUser: true
+                )
+            }
+            session = current
+            processed = completed
+            sessionIsDraft = false
+            sessionNameSource = .user
+            state = .done
+            lastError = nil
+            path = []
+            await refresh()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
     }
 }
 

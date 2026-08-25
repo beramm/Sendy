@@ -52,6 +52,7 @@ struct ModelTests {
     @Test("ClimbSession takes a second attempt without touching the reference")
     func sessionAttempts() throws {
         var session = ClimbSession(name: "test")
+        session.grade = .v4
         session.reference = VideoRef(filename: "ref.mov", role: .reference, label: "Reference")
         session.addAttempt(VideoRef(filename: "a1.mov", role: .attempt))
         let referenceBefore = session.reference
@@ -60,6 +61,17 @@ struct ModelTests {
         #expect(session.reference == referenceBefore)
         #expect(session.attempts[1].label == "Attempt 2")
         #expect(try roundTrip(session) == session)
+    }
+
+    @Test("Sessions saved before grades existed still decode")
+    func oldSessionWithoutGradeDecodes() throws {
+        let encoded = try JSONEncoder().encode(ClimbSession(name: "legacy"))
+        var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        object.removeValue(forKey: "grade")
+        let oldData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ClimbSession.self, from: oldData)
+        #expect(decoded.grade == nil)
     }
 
     @Test("Capture orientation survives a session round-trip")
@@ -200,6 +212,24 @@ struct TuningConfigCompatibilityTests {
         let referenceVideoURL = await store.videoURL(session: session, video: reference)
         #expect(FileManager.default.fileExists(atPath: referenceVideoURL.path))
         #expect(await store.hasCachedPose(session: session, video: reference, source: .vision) == true)
+    }
+
+    @Test("A draft is invisible until session metadata is committed")
+    func draftIsNotListed() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var draft = try await store.createDraft(name: "Working title")
+        #expect(await store.listSessions().isEmpty)
+
+        draft.name = "Moon Board Project"
+        draft.grade = .v4
+        try await store.save(draft)
+
+        let saved = try #require(await store.listSessions().first)
+        #expect(saved.name == "Moon Board Project")
+        #expect(saved.grade == .v4)
     }
 
 }

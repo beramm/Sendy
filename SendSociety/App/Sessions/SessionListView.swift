@@ -5,10 +5,6 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(AppModel.self) private var model
 
-    private let gradeImages = [
-        "GradeV1", "GradeV5", "GradeV3", "GradeV2", "GradeV4", "GradeV6",
-    ]
-
     var body: some View {
         ZStack {
             AppBackground()
@@ -106,12 +102,11 @@ struct SessionListView: View {
     /// Row chrome is stripped to keep the same look as before.
     private var sessionList: some View {
         List {
-            ForEach(Array(model.sessions.enumerated()), id: \.element.id) {
-                index, session in
+            ForEach(model.sessions) { session in
                 Button {
-                    model.open(session)
+                    Task { await model.open(session) }
                 } label: {
-                    sessionRow(session, gradeImage: gradeImages[index % gradeImages.count])
+                    sessionRow(session)
                 }
                 .buttonStyle(.plain)
                 .background(
@@ -162,13 +157,21 @@ struct SessionListView: View {
         .frame(minHeight: 260)
     }
 
-    private func sessionRow(_ session: ClimbSession, gradeImage: String) -> some View {
+    private func sessionRow(_ session: ClimbSession) -> some View {
         HStack(spacing: 16) {
-            Image(gradeImage)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 44, height: 40)
-                .accessibilityHidden(true)
+            if let grade = session.grade {
+                Image("GradeV\(grade.rawValue)")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 44, height: 40)
+                    .accessibilityLabel(grade.displayName)
+            } else {
+                Image(systemName: "figure.climbing")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 44, height: 40)
+                    .accessibilityLabel("Grade not set")
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.name)

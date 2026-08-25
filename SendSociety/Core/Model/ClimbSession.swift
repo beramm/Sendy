@@ -1,5 +1,22 @@
 import Foundation
 
+/// The bouldering grade the climber assigns when saving a comparison.
+///
+/// The current artwork and save flow cover V1–V6. Keeping this as a typed
+/// value instead of embedding "V4" in the title lets the list and any future
+/// filters use the grade without parsing user-entered text.
+public enum ClimbGrade: Int, Sendable, Codable, Hashable, CaseIterable, Identifiable {
+    case v1 = 1
+    case v2
+    case v3
+    case v4
+    case v5
+    case v6
+
+    public var id: Int { rawValue }
+    public var displayName: String { "V\(rawValue)" }
+}
+
 /// Gravity measured in the phone's coordinate system when an in-app recording
 /// actually begins. Unlike a Core Motion attitude quaternion, gravity remains
 /// comparable after the capture screen has been dismissed and a new motion
@@ -97,6 +114,9 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
     /// Why the session is called what it is. **`.user` is a lock**: a name a
     /// human typed is never replaced by a geocode or a date.
     public var nameSource: SessionNameSource
+    /// Chosen by the climber in the final Save Climb sheet. Nil keeps sessions
+    /// written by older app versions readable.
+    public var grade: ClimbGrade?
 
     public init(
         id: UUID = UUID(),
@@ -108,7 +128,8 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         manualRouteOverride: Route? = nil,
         poseSource: PoseSource = .vision,
         coordinate: Coordinate2D? = nil,
-        nameSource: SessionNameSource = .date
+        nameSource: SessionNameSource = .date,
+        grade: ClimbGrade? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -120,6 +141,7 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         self.poseSource = poseSource
         self.coordinate = coordinate
         self.nameSource = nameSource
+        self.grade = grade
     }
 
     /// Sessions written before pose sources existed decode as Vision rather
@@ -140,6 +162,7 @@ public struct ClimbSession: Sendable, Codable, Hashable, Identifiable {
         // and either way re-resolving one would rename a session the user
         // already knows by sight.
         nameSource = try c.decodeIfPresent(SessionNameSource.self, forKey: .nameSource) ?? .user
+        grade = try c.decodeIfPresent(ClimbGrade.self, forKey: .grade)
     }
 
     /// A name the user owns, and which nothing may overwrite.

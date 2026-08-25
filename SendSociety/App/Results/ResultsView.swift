@@ -26,6 +26,7 @@ struct ResultsView: View {
     @State private var isPlaying = false
     @State private var isScrubbing = false
     @State private var showNumbers = false
+    @State private var showSaveClimb = false
     @State private var frameCache = FrameImageCache()
     private let showsPreviewArtwork: Bool
 
@@ -52,6 +53,12 @@ struct ResultsView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: isPlaying) { await runPlayback() }
+        .sheet(isPresented: $showSaveClimb) {
+            SaveClimbSheet(
+                initialTitle: model.session?.name ?? "",
+                initialGrade: model.session?.grade
+            )
+        }
     }
 
     private func results(_ processed: ProcessedSession) -> some View {
@@ -124,7 +131,7 @@ struct ResultsView: View {
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Return to clips")
+                .accessibilityLabel("Save and close climb")
             }
 
             HStack(spacing: 10) {
@@ -798,11 +805,11 @@ struct ResultsView: View {
 
     private func closeResults() {
         isPlaying = false
-        if let setupIndex = model.path.lastIndex(of: .setup) {
-            model.path = Array(model.path.prefix(setupIndex + 1))
-        } else {
+        guard model.processed != nil else {
             model.path.removeAll()
+            return
         }
+        showSaveClimb = true
     }
 }
 

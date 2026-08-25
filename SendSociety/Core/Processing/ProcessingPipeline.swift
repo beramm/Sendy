@@ -31,7 +31,7 @@ public struct StageReport: Sendable, Codable, Hashable, Identifiable {
 
 /// Everything a results screen needs. Produced once; switching comparison modes
 /// must not re-run any of it.
-public struct ProcessedSession: Sendable {
+public struct ProcessedSession: Sendable, Codable {
     public var session: ClimbSession
     public var attemptIndex: Int
     public var config: TuningConfig
@@ -82,8 +82,41 @@ public struct ProcessedSession: Sendable {
     /// `RouteBuilder` or `ContactDetector` may read it. Nil when it could not
     /// be built, in which case the skeleton view keeps its plain background and
     /// the stage report says why.
-    public var wallPlate: WallPlate?
+    public var wallPlate: WallPlate? = nil
     public var stages: [StageReport]
+
+    /// `WallPlate` wraps a `CGImage`, so the image itself remains in the
+    /// existing PNG cache. Everything else is Codable and is saved as the
+    /// completed result, including the Foundation Models prose. Loading a
+    /// saved climb restores the PNG separately and never invokes the provider.
+    enum CodingKeys: String, CodingKey {
+        case session
+        case attemptIndex
+        case config
+        case referencePose
+        case attemptPose
+        case referenceScale
+        case attemptScale
+        case referenceContacts
+        case attemptContacts
+        case route
+        case sections
+        case sequences
+        case warpPaths
+        case sequenceWarpPaths
+        case referenceMetrics
+        case attemptMetrics
+        case referenceSectionMetrics
+        case attemptSectionMetrics
+        case deltas
+        case sequenceDeltas
+        case analyses
+        case sequenceAnalyses
+        case fallReport
+        case fallAnalysis
+        case alignment
+        case stages
+    }
 
     /// Every warning from every stage, in pipeline order. The results screen
     /// shows these; none are swallowed.
