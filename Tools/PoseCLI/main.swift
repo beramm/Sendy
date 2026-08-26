@@ -676,6 +676,27 @@ func commandPipeline(_ args: [String]) async throws {
                      marked ? "YES" : "no"))
     }
 
+    // Exactly what the two cards and the Differences sheet render, per
+    // sequence. Printed because the copy is the deliverable: a phrase that
+    // reads as a bug on a card reads as a bug here too, one command from a
+    // laptop instead of a trip to a wall.
+    print("\nRESULTS TEXT  (REF/YOU card phrase, then the sheet's prose)")
+    for analysis in result.sequenceAnalyses {
+        print(String(format: "%3d   [%@] narrated-by %@", analysis.sequenceIndex + 1,
+                     analysis.kind.rawValue, analysis.narrationSource ?? "—"))
+        print("      REF card   \(analysis.referenceFinding?.cardSentence(causeSubject: "they") ?? "<none>")")
+        print("      YOU card   \(analysis.attemptFinding?.cardSentence(causeSubject: "you") ?? "<none>")")
+        print("      REF lead   \(analysis.referenceFinding?.headline ?? "<none>")")
+        print("      YOU lead   \(analysis.attemptFinding?.headline ?? "<none>")")
+        print("      REF sheet  \(analysis.referenceNarrative ?? "<none>")")
+        print("      YOU sheet  \(analysis.attemptNarrative ?? "<none>")")
+        for phrase in [analysis.referenceFinding?.headline, analysis.attemptFinding?.headline].compactMap({ $0 }) {
+            if let failure = HeadlineGuard.failure(phrase) {
+                print("      !! card phrase would be rejected: \(failure)")
+            }
+        }
+    }
+
     // Locked playback reads the attempt frame off these paths. An empty one is
     // a pane that shows nothing however far the scrubber moves.
     print("\nSEQUENCE WARP PATHS  (what locked scrubbing follows)")

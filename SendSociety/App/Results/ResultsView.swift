@@ -72,6 +72,7 @@ struct ResultsView: View {
     @State private var isPlaying = false
     @State private var isScrubbing = false
     @State private var showNumbers = false
+    @State private var showDifferences = false
     @State private var showSaveClimb = false
     @State private var focusedVideo: ResultsFocusedVideo?
     @State private var frameCache = FrameImageCache()
@@ -159,6 +160,14 @@ struct ResultsView: View {
         .sheet(isPresented: $showNumbers) {
             if let insight = currentInsight(processed) {
                 ResultNumbersSheet(insight: insight)
+            }
+        }
+        // Words here, numbers in the other one. Two sheets rather than two
+        // tabs of one, because they are reached by different gestures on
+        // different controls and neither is a mode of the other.
+        .sheet(isPresented: $showDifferences) {
+            if let insight = currentInsight(processed) {
+                SequenceDifferencesSheet(insight: insight, fallReport: processed.fallReport)
             }
         }
         .onChange(of: displayMode) { _, mode in
@@ -813,6 +822,9 @@ struct ResultsView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Sequence \(position.sectionIndex + 1) of \(count)")
 
+            // Equal heights, not top-aligned. Two phrases of different word
+            // counts wrap to different line counts, and a pair of cards at
+            // different heights reads as one of them having failed.
             HStack(alignment: .top, spacing: 8) {
                 differenceCard(
                     label: "REF",
@@ -827,6 +839,7 @@ struct ResultsView: View {
                     finding: insight?.attemptFinding
                 )
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -837,48 +850,62 @@ struct ResultsView: View {
         finding: SequenceDifferenceFinding?
     ) -> some View {
         let resolved = finding ?? .unavailable("No sequence finding was produced.")
-        let sentence = resolved.sentence(
-            subject: label == "YOU" ? "You" : "The reference",
+        // One sentence, not a three-word phrase. A phrase fits the card and
+        // fails it: "More direct" on a wall leaves the climber asking more
+        // direct than what, and how. The cause is the informative half and it
+        // belongs here, not one tap away.
+        //
+        // No subject in front — the badge immediately above is the subject.
+        let phrase = resolved.cardSentence(
             causeSubject: label == "YOU" ? "you" : "they"
         )
 
-        return VStack(spacing: 9) {
-            HStack(alignment: .center) {
-                Text(label)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(color)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 28)
-                    .background(Color.black.opacity(0.72), in: .capsule)
+        return Button { showDifferences = true } label: {
+            VStack(spacing: 9) {
+                HStack(alignment: .center) {
+                    Text(label)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 28)
+                        .background(Color.black.opacity(0.72), in: .capsule)
 
-                Spacer(minLength: 4)
+                    Spacer(minLength: 4)
 
-                Text(duration)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .foregroundStyle(ResultsStyle.secondaryText)
+                    Text(duration)
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundStyle(ResultsStyle.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(phrase)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(resolved.isAvailable ? Color.white : ResultsStyle.secondaryText)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer(minLength: 0)
             }
-
-            Spacer(minLength: 0)
-
-            Text(sentence)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(resolved.isAvailable ? Color.white : ResultsStyle.secondaryText)
-            .multilineTextAlignment(.leading)
-            .lineLimit(nil)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer(minLength: 0)
+            .padding(12)
+            // Sized for a sentence again. The pair stretches to the taller of
+            // the two, so the card whose sentence runs to four lines does not
+            // leave its partner short.
+            .frame(maxWidth: .infinity, minHeight: 112, maxHeight: .infinity)
+            .background(
+                ResultsStyle.panelSurface,
+                in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
+            )
+            .contentShape(.rect(cornerRadius: ResultsStyle.panelCornerRadius))
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 112)
-        .background(
-            ResultsStyle.panelSurface,
-            in: .rect(cornerRadius: ResultsStyle.panelCornerRadius)
-        )
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label), \(duration), \(sentence)")
+        .accessibilityLabel("\(label), \(duration), \(phrase)")
         .accessibilityValue(resolved.unavailableReason ?? "")
+        .accessibilityHint("Opens the written comparison for this sequence.")
+        .accessibilityAddTraits(.isButton)
     }
 
     private func numbersButton(_ processed: ProcessedSession) -> some View {

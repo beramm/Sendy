@@ -561,7 +561,7 @@ public actor ProcessingPipeline {
         }
         let fallAnalysis = try? await analysisProvider.analyzeFall(fallReport, sections: deltas)
         let sequenceComposer = SequenceAnalysisComposer(config: config)
-        let sequenceAnalyses = sequenceResult.sequences.map { sequence in
+        var sequenceAnalyses = sequenceResult.sequences.map { sequence in
             sequenceComposer.compose(
                 sequence: sequence,
                 sectionDeltas: deltas,
@@ -570,10 +570,41 @@ public actor ProcessingPipeline {
                 fallAnalysis: fallAnalysis
             )
         }
+
+        // The Results screen's own text, written here and cached with the
+        // session. Deliberately not staged behind the screen: measured on an
+        // iPhone 17 the two calls cost 0.75s and 0.83s, against the 1.4s per
+        // move this same provider already spends above. A background queue
+        // would save a few seconds of a wait the pose stage dominates, and
+        // cost a second meaning of "done".
+        var narrationFailures = 0
+        for (i, analysis) in sequenceAnalyses.enumerated() {
+            announce("Writing it up", Double(i) / Double(max(1, sequenceAnalyses.count)))
+            try checkCancelled()
+            guard let request = SequenceNarrationRequest(
+                analysis: analysis,
+                config: config,
+                fallContext: Self.fallContext(
+                    for: analysis,
+                    sequences: sequenceResult.sequences,
+                    report: fallReport
+                )
+            ) else { continue }
+            if let narration = try? await analysisProvider.narrate(request) {
+                sequenceAnalyses[i].apply(narration)
+            } else {
+                // Fail soft: the deterministic headline the composer already
+                // wrote stays on the card, and the sheet says there is no
+                // write-up rather than showing an empty section.
+                narrationFailures += 1
+            }
+        }
         report(
             "Analysis", t, .ok,
             "\(analyses.count) moves, \(sequenceAnalyses.count) sequences, \(fallReport.occurred ? "fall detected" : "no fall")",
-            fallReport.warnings + referenceWarnings
+            fallReport.warnings + referenceWarnings + (narrationFailures > 0
+                ? ["\(narrationFailures) of \(sequenceAnalyses.count) sequences have no written comparison. Their cards still show the measured finding."]
+                : [])
         )
 
         return ProcessedSession(
@@ -608,6 +639,40 @@ public actor ProcessingPipeline {
     }
 
     // MARK: Helpers
+
+    /// The fall's proximate/distal split, in words, for the sequences it
+    /// touches.
+    ///
+    /// Carries **no move ordinal**, on purpose. The ordinal is not the useful
+    /// part — the scrubber and the distal sequence's own card already say
+    /// where it is — and a digit in this string would either be echoed by the
+    /// model and rejected by `NarrativeGuard`, or template a number into prose
+    /// that has nowhere to show its working.
+    static func fallContext(
+        for analysis: SequenceAnalysis,
+        sequences: [ClimbSequence],
+        report: FallReport
+    ) -> String? {
+        guard report.occurred,
+              let sequence = sequences.first(where: { $0.index == analysis.sequenceIndex })
+        else { return nil }
+
+        let isFall = report.fallSectionIndex.map(sequence.referenceMoves.contains) ?? false
+        let isDistal = report.distalSectionIndex.map(sequence.referenceMoves.contains) ?? false
+        let splitExists = report.distalSectionIndex != nil
+            && report.distalSectionIndex != report.fallSectionIndex
+
+        switch (isFall, isDistal) {
+        case (true, _) where splitExists:
+            return "This is the sequence the go ended on, but what caused it started earlier in the climb."
+        case (true, _):
+            return "This is the sequence the go ended on."
+        case (false, true):
+            return "The go ended later, but this is the sequence where the trouble started."
+        default:
+            return nil
+        }
+    }
 
     struct PoseDataResult: Sendable {
         var pose: PoseSequence

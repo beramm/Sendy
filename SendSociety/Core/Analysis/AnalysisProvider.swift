@@ -85,6 +85,75 @@ public protocol AnalysisProvider: Sendable {
     var isAvailable: Bool { get async }
     func analyze(_ delta: SectionDelta) async throws -> SectionAnalysis
     func analyzeFall(_ report: FallReport, sections: [SectionDelta]) async throws -> SectionAnalysis?
+    /// The Results screen's text for one comparison sequence: the pair of card
+    /// phrases and the pair of paragraphs behind them.
+    ///
+    /// Separate from `analyze` because it works at sequence level, which is
+    /// the unit of comparison, where `analyze` works per move.
+    func narrate(_ request: SequenceNarrationRequest) async throws -> SequenceNarration
+}
+
+public extension AnalysisProvider {
+    /// The deterministic narration: the phrases Swift already chose, and the
+    /// long-form claims they were compressed from.
+    ///
+    /// This is the whole implementation on a device without Foundation
+    /// Models, not a placeholder for one — so it is worded as final text, and
+    /// nothing is ever shown from here and then swapped for a model phrase.
+    func narrate(_ request: SequenceNarrationRequest) async throws -> SequenceNarration {
+        SequenceNarration(
+            referenceHeadline: request.referenceHeadline,
+            attemptHeadline: request.attemptHeadline,
+            referenceNarrative: Self.writtenNarrative(request.referenceSentence, request: request),
+            attemptNarrative: Self.writtenNarrative(
+                request.attemptSentence,
+                request: request,
+                isAttempt: true,
+                includingFallContext: true
+            ),
+            source: name
+        )
+    }
+
+    /// The claim, plus the one honest thing code can add to it: which
+    /// measurements it came from. No figures — those are one tap away in
+    /// Detailed Analytics.
+    /// The fall context belongs to the attempt's paragraph only. The other
+    /// climber did not fall, and saying where the go ended under a REFERENCE
+    /// heading describes the wrong person.
+    static func writtenNarrative(
+        _ sentence: String,
+        request: SequenceNarrationRequest,
+        isAttempt: Bool = false,
+        includingFallContext: Bool = false
+    ) -> String {
+        var parts = [sentence]
+        // The fall comes before the rest. Where the go ended is the most
+        // important thing on the screen.
+        if includingFallContext, let fallContext = request.fallContext {
+            parts.append(fallContext)
+        }
+        if let reason = request.unavailableReason, !request.comparisonIsValid {
+            parts.append(reason)
+        }
+        // The measurements the headline sentence did not already use. Two of
+        // the four are in it — the observation's and its cause's — so this
+        // picks up the rest, which otherwise only ever appeared as a bar in
+        // Detailed Analytics.
+        //
+        // Written rather than generated, so the fallback paragraph is as full
+        // as the model's on a device that has no model.
+        let remaining = request.measurements.dropFirst(2).map { $0.phrase(forAttempt: isAttempt) }
+        if !remaining.isEmpty {
+            let subject = isAttempt ? "You" : "They"
+            parts.append("\(subject) also \(ListFormatter.localizedString(byJoining: remaining)).")
+        }
+        // No "that read comes from …" line any more: the sheet prints each
+        // climber's figure for those measurements directly beneath this
+        // paragraph, and explains what each one is. Naming them in prose as
+        // well put the same two words on screen three times.
+        return parts.joined(separator: " ")
+    }
 }
 
 // MARK: - Guards
@@ -153,9 +222,26 @@ public enum NumberGuard {
     /// kilogram or a centimetre can only have been invented.
     public static let forbiddenUnits = ["kg", "kilogram", "lb", "pound", "cm", "centimet", "metre", "meter", "inch", "foot of", "newton"]
 
+    /// Matched at word starts, not as bare substrings.
+    ///
+    /// A plain `contains` finds "lb" inside **elb**ows and "inch" inside
+    /// p**inch** — so a sentence about bent elbows on a pinch was rejected for
+    /// quoting pounds and inches. Both are words this app's copy uses
+    /// constantly, and the rejection was silent: the model's output was
+    /// discarded and the written version shown, with the reason recorded as a
+    /// unit that was never there.
+    ///
+    /// A word-start boundary keeps every real catch — "15 kg", "3 inches",
+    /// "10 centimetres" — because a unit is always at the start of its word.
     public static func forbiddenUnitsPresent(in text: String) -> [String] {
         let lower = text.lowercased()
-        return forbiddenUnits.filter { lower.contains($0) }
+        return forbiddenUnits.filter { unit in
+            guard let pattern = try? NSRegularExpression(
+                pattern: "\\b" + NSRegularExpression.escapedPattern(for: unit)
+            ) else { return lower.contains(unit) }
+            let range = NSRange(lower.startIndex ..< lower.endIndex, in: lower)
+            return pattern.firstMatch(in: lower, range: range) != nil
+        }
     }
 }
 
@@ -198,6 +284,199 @@ public enum DirectionGuard {
     }
 }
 
+/// Catches prose that keeps both halves of a claim and reverses the arrow
+/// between them.
+///
+/// `DirectionGuard` checks that the prose agrees about *who did better*. This
+/// checks that it agrees about *what caused what*, which is a separate way to
+/// be backwards and the one the on-device model actually reaches for.
+///
+/// The observed failure: given "you put more weight through the arms **because**
+/// you climbed with more hip tilt", the model wrote "you put more weight on
+/// your arms, **so** you kept your hips tilted." Both clauses survive, in the
+/// same order, and the causality is inverted by a two-letter word. Nothing
+/// else catches it — there is no digit, no unit, no speculation, no unlicensed
+/// anatomy, and no comparative for `DirectionGuard` to read.
+///
+/// The rule is purely structural, which is what makes it safe to enforce.
+/// `A because B` means B causes A. A forward connective reverses the reading,
+/// so the same meaning requires the clauses to swap: `B so A`. Prose that
+/// writes `A so B` has said the opposite of its brief.
+public enum CausalOrderGuard {
+    /// Connectives where the cause comes **first**: `cause, so effect`.
+    static let forward = [" so ", " so, ", " therefore ", " which meant ", " which led ", " leading to ", " causing ", " and so "]
+    /// Connectives where the effect comes **first**: `effect because cause`.
+    static let backward = [" because ", " since ", " as a result of ", " due to ", " owing to "]
+
+    /// Words that carry no topic and would make every clause look alike.
+    static let ignored: Set<String> = [
+        "you", "your", "yours", "they", "their", "them", "the", "a", "an", "and",
+        "more", "less", "most", "least", "on", "in", "into", "of", "to", "with",
+        "was", "were", "had", "been", "is", "are", "it", "its", "this", "that",
+        "here", "there", "through", "than", "then", "so", "because", "while",
+        "kept", "keeping", "put", "putting", "climber", "other", "at", "for"
+    ]
+
+    static func topics(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .map(String.init)
+                .filter { $0.count > 2 && !ignored.contains($0) }
+        )
+    }
+
+    /// Splits on the first connective of either kind. Returns nil when the
+    /// text makes no causal claim at all, which is not this guard's business.
+    static func split(_ text: String) -> (head: String, tail: String, causeIsFirst: Bool)? {
+        let padded = " " + text.lowercased().replacingOccurrences(of: ",", with: " ") + " "
+        var best: (range: Range<String.Index>, causeIsFirst: Bool)?
+        for connective in forward + backward {
+            guard let range = padded.range(of: connective) else { continue }
+            if best == nil || range.lowerBound < best!.range.lowerBound {
+                best = (range, forward.contains(connective))
+            }
+        }
+        guard let best else { return nil }
+        return (
+            String(padded[padded.startIndex ..< best.range.lowerBound]),
+            String(padded[best.range.upperBound ..< padded.endIndex]),
+            best.causeIsFirst
+        )
+    }
+
+    /// Returns a reason when `text` inverts the causality of `claim`.
+    ///
+    /// Silent whenever the reading is ambiguous: a clause that matches the
+    /// claim's observation and its cause equally well proves nothing, and a
+    /// false rejection here costs a written sentence for no gain.
+    public static func failure(in text: String, claim: String) -> String? {
+        guard let source = split(claim), let generated = split(text) else { return nil }
+
+        // Normalise both to (observation, cause) regardless of which
+        // connective each happened to use.
+        let sourceObservation = topics(source.causeIsFirst ? source.tail : source.head)
+        let sourceCause = topics(source.causeIsFirst ? source.head : source.tail)
+        guard !sourceObservation.isEmpty, !sourceCause.isEmpty else { return nil }
+
+        let generatedObservation = topics(generated.causeIsFirst ? generated.tail : generated.head)
+        let generatedCause = topics(generated.causeIsFirst ? generated.head : generated.tail)
+
+        // Read straight: does the half the prose calls the cause look like the
+        // claim's cause, or like its observation?
+        let asWritten = generatedCause.intersection(sourceCause).count
+            + generatedObservation.intersection(sourceObservation).count
+        let inverted = generatedCause.intersection(sourceObservation).count
+            + generatedObservation.intersection(sourceCause).count
+
+        guard inverted > asWritten else { return nil }
+        return "it reversed which measurement caused which"
+    }
+}
+
+/// Generated prose may not name a body part the measurement did not.
+///
+/// This app measures nineteen joints and a fixed set of derived quantities, so
+/// the anatomy it can say anything about is a **closed list**. That makes the
+/// check principled rather than a growing list of banned phrases: a narrative
+/// may use the body parts its own claim used, and no others.
+///
+/// The failure it was written for: given "you put more weight through the arms
+/// because you stayed farther from the wall", the on-device model wrote
+/// "…more weight through your arms **and shoulders**". Shoulders were never
+/// measured on that finding. It is a small word and a whole invented claim.
+public enum AnatomyGuard {
+    /// Every body part the prose in this app has any business naming. Grouped
+    /// so a claim about "the arms" licenses "elbow" but not "hip".
+    static let families: [[String]] = [
+        ["arm", "elbow", "forearm", "bicep", "tricep"],
+        ["shoulder", "lat", "back", "armpit"],
+        ["hand", "wrist", "grip", "finger"],
+        ["hip", "pelvis", "glute"],
+        ["knee", "thigh", "quad", "hamstring"],
+        ["foot", "feet", "toe", "ankle", "heel", "calf"],
+        ["torso", "chest", "core", "trunk", "waist"],
+        ["leg"],
+        ["head", "neck"]
+    ]
+
+    /// The second body part a metric is intrinsically about.
+    ///
+    /// Arm load *share* is the weight through the arms as against the feet, so
+    /// a sentence about it may name either — "you hung off your arms where
+    /// they stood on their feet" is the voice this app is aiming at, and a
+    /// guard that rejected it would be enforcing the wrong thing. Only the
+    /// metrics that genuinely span two parts appear here.
+    static func partner(of kind: MetricKind) -> [String] {
+        switch kind {
+        case .armLoadShare, .armLoadPeak, .loadAsymmetry, .diagonalLoadBalance:
+            ["foot", "feet"]
+        case .unweightedFootTime, .feetSetBeforeReach, .footCommitmentSeconds, .reachMargin:
+            ["hand", "arm"]
+        case .kneeDrive:
+            ["foot", "hip"]
+        case .hipDistanceMean, .hipDistancePeak, .hipDistanceStart, .hipDistanceEnd:
+            ["wall"]
+        default:
+            []
+        }
+    }
+
+    /// Everything a narration about these measurements may name.
+    ///
+    /// Built from what was *measured*, not from how the claim happens to be
+    /// worded: "stayed farther from the wall" is a hip measurement, and prose
+    /// that says "hips" is describing the metric, not inventing one.
+    public static func licensedTerms(
+        metricKinds: [MetricKind],
+        claims: [String]
+    ) -> String {
+        let fromMetrics = metricKinds.flatMap { [$0.displayName] + partner(of: $0) }
+        return (claims + fromMetrics).joined(separator: " ").lowercased()
+    }
+
+    /// Families named in `text` that nothing in `licensed` accounts for.
+    public static func violations(in text: String, licensedBy licensed: String) -> [String] {
+        let lower = text.lowercased()
+        let allowed = licensed.lowercased()
+        return families.compactMap { family in
+            guard family.contains(where: { lower.contains($0) }) else { return nil }
+            guard !family.contains(where: { allowed.contains($0) }) else { return nil }
+            return family[0]
+        }
+    }
+}
+
+/// Pose data does not contain whether something *worked*, so no output may
+/// claim it did.
+///
+/// The sibling of `SpeculationGuard`, and it exists for the same reason: a
+/// real failure. Given "you put more weight through the arms" — a finding the
+/// measurement marks as the *worse* side — the on-device model wrote
+/// **"which helped you maintain a stable position on the wall"**, and wrote
+/// the same clause under the other climber. Nothing in this app measures
+/// stability, security or whether a position helped; those are outcomes, and
+/// the pipeline only measures geometry and load.
+///
+/// `DirectionGuard` does not catch it, because the sentence never uses a
+/// comparative. It is a different failure: not the wrong direction, but a
+/// conclusion drawn past the end of the evidence.
+public enum OutcomeGuard {
+    /// Words that assert an effect the measurements never established. Kept
+    /// deliberately narrow — every term here is one this app has no metric
+    /// for, so a false rejection costs only the written sentence.
+    public static let forbiddenTerms = [
+        "helped", "helps", "helping", "which is good", "which is bad",
+        "stable", "stability", "unstable", "secure", "safer", "safely",
+        "prevents", "prevented", "avoids", "avoided", "risk of", "injury"
+    ]
+
+    public static func violations(in text: String) -> [String] {
+        let lower = text.lowercased()
+        return forbiddenTerms.filter { lower.contains($0) }
+    }
+}
+
 /// Pose data does not contain the climber's mental state, so no output may
 /// claim to know it.
 public enum SpeculationGuard {
@@ -205,7 +484,10 @@ public enum SpeculationGuard {
         "scared", "afraid", "fear", "nervous", "anxious", "panic", "confidence",
         "confident", "hesitant", "committed", "commitment", "psyched", "doubt",
         "intimidated", "brave", "courage", "mentally", "mindset", "willpower",
-        "gave up", "wanted it", "motivation", "focus", "focussed", "focused"
+        "gave up", "wanted it", "motivation", "focus", "focussed", "focused",
+        // Observed on device: "making sure you were comfortable before moving
+        // on". How a hold felt is not in the video either.
+        "comfortable", "comfortably", "comfort", "relaxed", "at ease", "unsure"
     ]
 
     public static func violations(in text: String) -> [String] {
