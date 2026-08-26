@@ -610,6 +610,8 @@ struct SkeletonOverlayPane: View {
     var badgeLabel: String? = nil
     var badgeColor: Color = .white
     var unavailableReason: String = "not reached"
+    /// Expanded Results owns the title and controls outside the footage.
+    var showsPaneLabel = true
     /// Shared with the neighbouring pane by ResultsView.
     var zoomScale: CGFloat = 1
     var panOffset: CGSize = .zero
@@ -621,7 +623,7 @@ struct SkeletonOverlayPane: View {
 
     var body: some View {
         VStack(spacing: badgeLabel == nil ? 2 : 0) {
-            if badgeLabel == nil {
+            if badgeLabel == nil, showsPaneLabel {
                 Text(title).font(.caption2).foregroundStyle(.secondary)
             }
             GeometryReader { geometry in
@@ -684,7 +686,7 @@ struct SkeletonOverlayPane: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     }
 
-                    if let badgeLabel {
+                    if showsPaneLabel, let badgeLabel {
                         Text(badgeLabel)
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundStyle(badgeColor)

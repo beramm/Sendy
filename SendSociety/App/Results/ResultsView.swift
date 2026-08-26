@@ -7,6 +7,25 @@ private enum ResultsDisplayMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum ResultsFocusedVideo: String {
+    case reference
+    case attempt
+
+    var title: String {
+        switch self {
+        case .reference: "Reference"
+        case .attempt: "You"
+        }
+    }
+
+    var colour: Color {
+        switch self {
+        case .reference: ResultsStyle.reference
+        case .attempt: ResultsStyle.attempt
+        }
+    }
+}
+
 struct ResultsView: View {
     private static let playbackStep = 0.125
 
@@ -27,7 +46,9 @@ struct ResultsView: View {
     @State private var isScrubbing = false
     @State private var showNumbers = false
     @State private var showSaveClimb = false
+    @State private var focusedVideo: ResultsFocusedVideo?
     @State private var frameCache = FrameImageCache()
+    @Namespace private var videoExpansionNamespace
     private let showsPreviewArtwork: Bool
 
     init(
@@ -65,27 +86,46 @@ struct ResultsView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 0) {
-                    header
-                        .padding(.bottom, 16)
+                    if focusedVideo == nil {
+                        header
+                            .padding(.bottom, 16)
+                            .transition(.scale(scale: 0.94, anchor: .top).combined(with: .opacity))
+                    }
 
-                    comparison(processed)
-                        .frame(height: comparisonHeight(for: geometry.size, processed: processed))
+                    if let focusedVideo {
+                        focusedComparison(processed, focusedVideo: focusedVideo)
+                            .transition(.identity)
+                    } else {
+                        comparison(processed)
+                            .frame(height: comparisonHeight(for: geometry.size, processed: processed))
+                            .transition(.identity)
+                    }
+
+                    if focusedVideo != nil {
+                        focusedSequenceStatus(processed)
+                            .padding(.top, 16)
+                    }
 
                     sequencePicker(processed)
-                        .padding(.top, 20)
+                        .padding(.top, focusedVideo == nil ? 20 : 4)
 
                     playbackControls
                         .padding(.top, 18)
 
-                    insightCards(processed)
-                        .padding(.top, 18)
+                    if focusedVideo == nil {
+                        insightCards(processed)
+                            .padding(.top, 18)
+                            .transition(.scale(scale: 0.94, anchor: .top).combined(with: .opacity))
 
-                    numbersButton(processed)
-                        .padding(.top, 18)
-                        .padding(.bottom, 24)
+                        numbersButton(processed)
+                            .padding(.top, 18)
+                            .padding(.bottom, 24)
+                            .transition(.scale(scale: 0.94, anchor: .top).combined(with: .opacity))
+                    }
                 }
                 .padding(.horizontal, 18)
                 .frame(minHeight: geometry.size.height, alignment: .top)
+                .animation(.spring(response: 0.38, dampingFraction: 0.86), value: focusedVideo)
             }
             .scrollIndicators(.hidden)
         }
@@ -240,20 +280,118 @@ struct ResultsView: View {
     }
 
     @ViewBuilder
-    private func comparison(_ processed: ProcessedSession) -> some View {
+    private func comparison(
+        _ processed: ProcessedSession,
+        focusedVideo: ResultsFocusedVideo? = nil
+    ) -> some View {
         let frames = resolvedFrames(processed)
 
         ResultsComparisonInteractionHost(
-            resetToken: "\(displayMode.rawValue)-\(position.sectionIndex)"
+            resetToken: "\(displayMode.rawValue)-\(position.sectionIndex)-\(focusedVideo?.rawValue ?? "both")",
+            usesFullWidthPane: focusedVideo != nil
         ) { zoomScale, panOffset, paneSize in
             comparisonContent(
                 processed,
                 frames: frames,
                 zoomScale: zoomScale,
                 panOffset: panOffset,
-                paneSize: paneSize
+                paneSize: paneSize,
+                focusedVideo: focusedVideo
             )
         }
+    }
+
+    private func focusedComparison(
+        _ processed: ProcessedSession,
+        focusedVideo: ResultsFocusedVideo
+    ) -> some View {
+        let rawAspect = CGFloat(
+            focusedVideo == .reference
+                ? processed.referencePose.xScale
+                : processed.attemptPose.xScale
+        )
+        let sourceAspect = rawAspect.isFinite && rawAspect > 0
+            ? rawAspect
+            : CGFloat(9.0 / 16.0)
+
+        return VStack(spacing: 7) {
+            Text(focusedVideo.title)
+                .font(.system(size: 23, weight: .semibold, design: .monospaced))
+                .foregroundStyle(focusedVideo.colour)
+
+            ZStack {
+                comparison(processed, focusedVideo: focusedVideo)
+                    .aspectRatio(sourceAspect, contentMode: .fit)
+
+                VStack {
+                    HStack {
+                        focusedControlButton(
+                            symbol: "xmark",
+                            label: "Close expanded video",
+                            action: closeFocusedVideo
+                        )
+
+                        Spacer()
+
+                        focusedControlButton(
+                            symbol: "rectangle.2.swap",
+                            label: focusedVideo == .reference
+                                ? "Show your video"
+                                : "Show reference video",
+                            action: swapFocusedVideo
+                        )
+                    }
+
+                    Spacer()
+
+                    HStack {
+                        Spacer()
+                        focusedSkeletonButton
+                    }
+                }
+                .padding(10)
+            }
+        }
+    }
+
+    private func focusedControlButton(
+        symbol: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 25, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 50, height: 50)
+                .background(
+                    ResultsStyle.controlSurface.opacity(0.94),
+                    in: .rect(cornerRadius: 12)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private var focusedSkeletonButton: some View {
+        Button {
+            skeletonEnabled.toggle()
+        } label: {
+            Image("ResultsSkeleton")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 25, height: 24)
+                .foregroundStyle(skeletonEnabled ? Color.black : ResultsStyle.secondaryText)
+                .frame(width: 58, height: 42)
+                .background(
+                    skeletonEnabled ? AppTheme.accent : ResultsStyle.controlSurface.opacity(0.94),
+                    in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Skeleton comparison")
+        .accessibilityValue(skeletonEnabled ? "On" : "Off")
     }
 
     @ViewBuilder
@@ -262,7 +400,8 @@ struct ResultsView: View {
         frames: (reference: Int, attempt: Int?),
         zoomScale: CGFloat,
         panOffset: CGSize,
-        paneSize: CGSize
+        paneSize: CGSize,
+        focusedVideo: ResultsFocusedVideo?
     ) -> some View {
         switch displayMode {
         case .overlay:
@@ -297,69 +436,109 @@ struct ResultsView: View {
         case .sideBySide:
             HStack(spacing: 4) {
                 if skeletonEnabled {
-                    SkeletonOverlayPane(
-                        title: "Reference",
-                        video: processed.session.reference,
-                        pose: processed.referencePose,
-                        frameIndex: frames.reference,
-                        metrics: processed.referenceMetrics.frame(at: frames.reference),
-                        scale: processed.referenceScale,
-                        colour: ResultsStyle.reference,
-                        transform: nil,
-                        overlays: overlays,
-                        scrubbing: isScrubbing,
-                        cache: frameCache,
-                        badgeLabel: "REF",
-                        badgeColor: ResultsStyle.reference,
-                        zoomScale: zoomScale,
-                        panOffset: panOffset
-                    )
-                    SkeletonOverlayPane(
-                        title: processed.attempt?.label.nonEmpty ?? "You",
-                        video: processed.attempt,
-                        pose: processed.attemptPose,
-                        frameIndex: frames.attempt,
-                        metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
-                        scale: processed.attemptScale,
-                        colour: ResultsStyle.attempt,
-                        transform: processed.alignment.homography.inverted,
-                        overlays: overlays,
-                        scrubbing: isScrubbing,
-                        cache: frameCache,
-                        badgeLabel: "YOU",
-                        badgeColor: ResultsStyle.attempt,
-                        unavailableReason: "Not reached",
-                        zoomScale: zoomScale,
-                        panOffset: panOffset
-                    )
+                    if focusedVideo != .attempt {
+                        SkeletonOverlayPane(
+                            title: "Reference",
+                            video: processed.session.reference,
+                            pose: processed.referencePose,
+                            frameIndex: frames.reference,
+                            metrics: processed.referenceMetrics.frame(at: frames.reference),
+                            scale: processed.referenceScale,
+                            colour: ResultsStyle.reference,
+                            transform: nil,
+                            overlays: overlays,
+                            scrubbing: isScrubbing,
+                            cache: frameCache,
+                            badgeLabel: "REF",
+                            badgeColor: ResultsStyle.reference,
+                            showsPaneLabel: focusedVideo == nil,
+                            zoomScale: zoomScale,
+                            panOffset: panOffset
+                        )
+                        .matchedGeometryEffect(
+                            id: "results-reference-video",
+                            in: videoExpansionNamespace,
+                            isSource: focusedVideo == nil
+                        )
+                        .contentShape(.rect)
+                        .onTapGesture { expandVideo(.reference) }
+                    }
+                    if focusedVideo != .reference {
+                        SkeletonOverlayPane(
+                            title: processed.attempt?.label.nonEmpty ?? "You",
+                            video: processed.attempt,
+                            pose: processed.attemptPose,
+                            frameIndex: frames.attempt,
+                            metrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
+                            scale: processed.attemptScale,
+                            colour: ResultsStyle.attempt,
+                            transform: processed.alignment.homography.inverted,
+                            overlays: overlays,
+                            scrubbing: isScrubbing,
+                            cache: frameCache,
+                            badgeLabel: "YOU",
+                            badgeColor: ResultsStyle.attempt,
+                            unavailableReason: "Not reached",
+                            showsPaneLabel: focusedVideo == nil,
+                            zoomScale: zoomScale,
+                            panOffset: panOffset
+                        )
+                        .matchedGeometryEffect(
+                            id: "results-attempt-video",
+                            in: videoExpansionNamespace,
+                            isSource: focusedVideo == nil
+                        )
+                        .contentShape(.rect)
+                        .onTapGesture { expandVideo(.attempt) }
+                    }
                 } else {
-                    ComparisonVideoPane(
-                        title: "Reference",
-                        video: processed.session.reference,
-                        pose: processed.referencePose,
-                        frameIndex: frames.reference,
-                        scrubbing: isScrubbing,
-                        cache: frameCache,
-                        badgeLabel: "REF",
-                        badgeColor: ResultsStyle.reference,
-                        showsPreviewArtwork: showsPreviewArtwork,
-                        zoomScale: zoomScale,
-                        panOffset: panOffset
-                    )
-                    ComparisonVideoPane(
-                        title: processed.attempt?.label.nonEmpty ?? "You",
-                        video: processed.attempt,
-                        pose: processed.attemptPose,
-                        frameIndex: frames.attempt,
-                        scrubbing: isScrubbing,
-                        cache: frameCache,
-                        badgeLabel: "YOU",
-                        badgeColor: ResultsStyle.attempt,
-                        showsPreviewArtwork: showsPreviewArtwork,
-                        unavailableReason: "Not reached",
-                        zoomScale: zoomScale,
-                        panOffset: panOffset
-                    )
+                    if focusedVideo != .attempt {
+                        ComparisonVideoPane(
+                            title: "Reference",
+                            video: processed.session.reference,
+                            pose: processed.referencePose,
+                            frameIndex: frames.reference,
+                            scrubbing: isScrubbing,
+                            cache: frameCache,
+                            badgeLabel: "REF",
+                            badgeColor: ResultsStyle.reference,
+                            showsPreviewArtwork: showsPreviewArtwork,
+                            showsBadge: focusedVideo == nil,
+                            zoomScale: zoomScale,
+                            panOffset: panOffset
+                        )
+                        .matchedGeometryEffect(
+                            id: "results-reference-video",
+                            in: videoExpansionNamespace,
+                            isSource: focusedVideo == nil
+                        )
+                        .contentShape(.rect)
+                        .onTapGesture { expandVideo(.reference) }
+                    }
+                    if focusedVideo != .reference {
+                        ComparisonVideoPane(
+                            title: processed.attempt?.label.nonEmpty ?? "You",
+                            video: processed.attempt,
+                            pose: processed.attemptPose,
+                            frameIndex: frames.attempt,
+                            scrubbing: isScrubbing,
+                            cache: frameCache,
+                            badgeLabel: "YOU",
+                            badgeColor: ResultsStyle.attempt,
+                            showsPreviewArtwork: showsPreviewArtwork,
+                            unavailableReason: "Not reached",
+                            showsBadge: focusedVideo == nil,
+                            zoomScale: zoomScale,
+                            panOffset: panOffset
+                        )
+                        .matchedGeometryEffect(
+                            id: "results-attempt-video",
+                            in: videoExpansionNamespace,
+                            isSource: focusedVideo == nil
+                        )
+                        .contentShape(.rect)
+                        .onTapGesture { expandVideo(.attempt) }
+                    }
                 }
             }
         }
@@ -514,6 +693,26 @@ struct ResultsView: View {
         // with the movement under the finger rather than after the selection it
         // causes — and so a flick across several sequences ticks for each one.
         .sensoryFeedback(.selection, trigger: centredSequence)
+    }
+
+    private func focusedSequenceStatus(_ processed: ProcessedSession) -> some View {
+        HStack(spacing: 7) {
+            Text("Sequence")
+                .foregroundStyle(ResultsStyle.secondaryText)
+            Text("\(position.sectionIndex + 1)")
+                .fontWeight(.bold)
+                .foregroundStyle(AppTheme.accent)
+            Text("/")
+                .foregroundStyle(ResultsStyle.secondaryText)
+            Text("\(processed.sequences.sequences.count)")
+                .foregroundStyle(ResultsStyle.secondaryText)
+        }
+        .font(.system(size: 15, design: .monospaced))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Sequence \(position.sectionIndex + 1) of \(processed.sequences.sequences.count)"
+        )
     }
 
     private var playbackControls: some View {
@@ -779,6 +978,26 @@ struct ResultsView: View {
         return paneWidth / sourceAspect
     }
 
+    private func expandVideo(_ video: ResultsFocusedVideo) {
+        guard focusedVideo == nil else { return }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            focusedVideo = video
+        }
+    }
+
+    private func closeFocusedVideo() {
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+            focusedVideo = nil
+        }
+    }
+
+    private func swapFocusedVideo() {
+        guard let focusedVideo else { return }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+            self.focusedVideo = focusedVideo == .reference ? .attempt : .reference
+        }
+    }
+
     private func referenceDurationLabel(_ processed: ProcessedSession) -> String {
         guard let sequence = currentSequence(processed) else { return "—" }
         return clock(duration(of: sequence.referenceRange, in: processed.referencePose))
@@ -843,6 +1062,7 @@ private struct ResultsComparisonInteractionHost<Content: View>: View {
     private static var zoomStep: CGFloat { 0.5 }
 
     let resetToken: String
+    var usesFullWidthPane = false
     @ViewBuilder let content: (CGFloat, CGSize, CGSize) -> Content
 
     @State private var zoom: CGFloat = 1
@@ -855,7 +1075,9 @@ private struct ResultsComparisonInteractionHost<Content: View>: View {
     var body: some View {
         GeometryReader { geometry in
             let paneSize = CGSize(
-                width: max(0, (geometry.size.width - 4) / 2),
+                width: usesFullWidthPane
+                    ? max(0, geometry.size.width)
+                    : max(0, (geometry.size.width - 4) / 2),
                 height: geometry.size.height
             )
 
