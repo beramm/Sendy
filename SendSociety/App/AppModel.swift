@@ -17,7 +17,12 @@ enum ProcessingState: Equatable {
 enum ClipImportState: Equatable {
     case idle
     case loading
+    /// The import itself failed — the file could not be read or copied.
     case failed(String)
+    /// The clip imported fine, but the pre-flight found no climber in it. The
+    /// file is on disk and playable; it is the content that is wrong, which is
+    /// why this is distinct from `failed`.
+    case unusable(String)
 }
 
 /// The screens the main flow can push. Leaf screens (capture, review, route
@@ -25,6 +30,10 @@ enum ClipImportState: Equatable {
 /// that nothing ever needs to address by value.
 enum AppRoute: Hashable {
     case setup
+    /// The camera, for one slot. Pushed rather than presented so the back
+    /// control is an ordinary pop and `SingleTakeSplitView` can still be a
+    /// `navigationDestination` of its own.
+    case capture(VideoRef.Role)
     case processing
     case results
     /// Stage timings, statuses and warnings. **Not in the main flow** — the
@@ -94,7 +103,13 @@ final class AppModel {
     }
 
     init() {
-        Task { await refresh() }
+        Task {
+            // Collect directories left by drafts a previous launch never
+            // finished. Nothing else can: a draft writes no `session.json`, so
+            // it is invisible to the list that would otherwise offer a delete.
+            await store.sweepAbandonedDrafts(keeping: nil)
+            await refresh()
+        }
     }
 
     /// In-memory state for SwiftUI previews. It intentionally bypasses the
@@ -111,19 +126,53 @@ final class AppModel {
         referenceImport == .loading || attemptImport == .loading
     }
 
+    /// The roles whose clip the pre-flight rejected.
+    var unusableRoles: [VideoRef.Role] {
+        var roles: [VideoRef.Role] = []
+        if case .unusable = referenceImport { roles.append(.reference) }
+        if case .unusable = attemptImport { roles.append(.attempt) }
+        return roles
+    }
+
+    /// The banner headline and body for the unusable-clip state, or nil when
+    /// both clips are fine. Built from the failing role so the words and the
+    /// orange slot can never disagree.
+    var unusableClipMessage: (headline: String, body: String)? {
+        let roles = unusableRoles
+        guard !roles.isEmpty else { return nil }
+        let subject: String = if roles.count == 2 {
+            "either climb"
+        } else {
+            roles[0] == .reference ? "the reference climb" : "your climb"
+        }
+        let body = roles.count == 2
+            ? "Sendy didn't find a climber in those videos."
+            : "Sendy didn't find a climber in that video."
+        return ("Couldn't read \(subject)", body)
+    }
+
     /// The submit gate. Both a reference and at least one attempt, and nothing
     /// still copying out of Photos.
     var canProcess: Bool {
-        session?.isReadyToProcess == true && !isImporting
+        session?.isReadyToProcess == true && !isImporting && unusableRoles.isEmpty
     }
 
     /// Why the submit button is disabled, in the user's terms. `nil` when it
     /// isn't — a disabled control with no stated reason is a dead end.
     var blockedReason: String? {
         guard let session else { return "Create a session first." }
-        if isImporting { return "Waiting for a clip to finish importing." }
-        if session.reference == nil { return "Add a reference climb — the stronger climber." }
-        if session.attempts.isEmpty { return "Add at least one attempt of your own." }
+        if isImporting { return "Preparing your clip…" }
+        // Named, not generic: a blocked button has to say which slot is the
+        // problem, and a clip the pre-flight rejected is a different problem
+        // from a clip that is missing.
+        let unusable = unusableRoles
+        if unusable.count == 2 { return "Replace both climbs" }
+        if let role = unusable.first {
+            return role == .reference ? "Replace the reference climb" : "Replace your climb"
+        }
+        if session.reference == nil && session.attempts.isEmpty { return "Two climbs needed" }
+        if session.reference == nil { return "Reference climb needed" }
+        if session.attempts.isEmpty { return "One more climb to go" }
         return nil
     }
 
@@ -192,6 +241,38 @@ final class AppModel {
             lastError = error.localizedDescription
             return false
         }
+    }
+
+    /// True when leaving the clips screen would destroy work: a draft that has
+    /// at least one clip in it. With no clips there is nothing to lose, so the
+    /// back gesture stays instant and the draft is discarded silently.
+    var draftHasClips: Bool {
+        guard sessionIsDraft, let session else { return false }
+        return session.reference != nil || !session.attempts.isEmpty
+    }
+
+    /// Unwinds a session that was never saved.
+    ///
+    /// A draft holds a working directory and, usually, copied video files.
+    /// Leaving the clips screen without saving must take both with it —
+    /// otherwise the clips sit in Application Support forever, invisible to a
+    /// list built from `session.json` and therefore impossible to delete from
+    /// inside the app.
+    func discardDraft() async {
+        guard sessionIsDraft, let abandoned = session else { return }
+        processingTask?.cancel()
+        processingTask = nil
+        await store.delete(id: abandoned.id)
+        session = nil
+        sessionIsDraft = false
+        sessionNameSource = .date
+        processed = nil
+        state = .idle
+        attemptIndex = 0
+        cachedPoseSources = []
+        lastError = nil
+        clearImportStates()
+        await refresh()
     }
 
     func open(_ s: ClimbSession) async {
@@ -275,7 +356,7 @@ final class AppModel {
             }
             defer { try? FileManager.default.removeItem(at: movie.url) }
             try await persist(movie.url, role: role, photoItem: item)
-            setImportState(.idle, for: role)
+            await runPreflight(for: role)
         } catch {
             setImportState(.failed(error.localizedDescription), for: role)
         }
@@ -296,7 +377,7 @@ final class AppModel {
                 role: role,
                 captureOrientation: captureOrientation
             )
-            setImportState(.idle, for: role)
+            await runPreflight(for: role)
         } catch {
             setImportState(.failed("Could not import the video: \(error.localizedDescription)"), for: role)
         }
@@ -324,6 +405,43 @@ final class AppModel {
             } catch {
                 setImportState(.failed("Could not trim the video: \(error.localizedDescription)"), for: role)
             }
+        }
+    }
+
+    /// The import pre-flight: is there a climber in the clip that just landed?
+    ///
+    /// Runs on the copied file, after `persist`, while the slot still shows its
+    /// import spinner — so a rejected clip is caught while the climber is still
+    /// standing at the wall and can film it again, rather than two minutes into
+    /// a pipeline run.
+    ///
+    /// **Fails open.** Anything other than a confident "nobody here" leaves the
+    /// slot idle and lets the pipeline be the judge.
+    private func runPreflight(for role: VideoRef.Role) async {
+        guard let session, let ref = videoRef(for: role) else {
+            setImportState(.idle, for: role)
+            return
+        }
+        let url = await store.videoURL(session: session, video: ref)
+        let extractor = PoseExtractorFactory.make(session.poseSource)
+        let verdict = (try? await extractor.probe(url: url, config: config)) ?? .inconclusive
+        switch verdict {
+        case .noClimberFound:
+            setImportState(.unusable("Sendy didn't find a climber in that video."), for: role)
+        case .climberFound, .inconclusive:
+            setImportState(.idle, for: role)
+        }
+    }
+
+    /// The clip currently in a slot, if any.
+    func video(for role: VideoRef.Role) -> VideoRef? {
+        videoRef(for: role)
+    }
+
+    private func videoRef(for role: VideoRef.Role) -> VideoRef? {
+        switch role {
+        case .reference: session?.reference
+        case .attempt: session?.attempts.first
         }
     }
 

@@ -48,7 +48,9 @@ public struct CaptureOrientation: Sendable, Codable, Hashable {
 /// One video belonging to a session. The file lives inside the session
 /// directory so a session is a single self-contained folder.
 public struct VideoRef: Sendable, Codable, Hashable, Identifiable {
-    public enum Role: String, Sendable, Codable {
+    public enum Role: String, Sendable, Codable, Hashable, Identifiable {
+        public var id: String { rawValue }
+
         /// The stronger climber's video. Not "pro", not "friend".
         case reference
         /// The user's own climb.

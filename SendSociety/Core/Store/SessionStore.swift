@@ -136,6 +136,36 @@ public actor SessionStore {
         try? FileManager.default.removeItem(at: directory(for: id))
     }
 
+    /// Deletes working directories left behind by drafts that were never saved.
+    ///
+    /// A draft writes no `session.json` (see ``createDraft(name:)``), so an
+    /// abandoned one is invisible to ``listSessions()`` but still holds its
+    /// imported clips. Backing out of the clips screen unwinds the current
+    /// draft, but a crash or a force-quit in the middle of one cannot, and
+    /// nothing else would ever collect it.
+    ///
+    /// Deleting is right rather than quarantining: without `session.json` there
+    /// is no name, no config and no clip roles, so the leftovers are loose video
+    /// files with UUID names and nothing to interpret them with.
+    ///
+    /// - Parameter keeping: the live draft's id, which must survive the sweep —
+    ///   otherwise a sweep at launch races the session the user is filling in
+    ///   and deletes the clips out from under it.
+    public func sweepAbandonedDrafts(keeping keep: UUID? = nil) {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey]
+        )) ?? []
+        for dir in contents {
+            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            if let keep, dir.lastPathComponent == keep.uuidString { continue }
+            // A directory whose name is not a session id is not ours to remove.
+            guard UUID(uuidString: dir.lastPathComponent) != nil else { continue }
+            let manifest = dir.appendingPathComponent("session.json")
+            guard !FileManager.default.fileExists(atPath: manifest.path) else { continue }
+            try? FileManager.default.removeItem(at: dir)
+        }
+    }
+
     // MARK: Completed result cache
 
     private func processedURL(session: ClimbSession) -> URL {

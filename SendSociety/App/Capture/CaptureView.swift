@@ -1,8 +1,8 @@
 #if os(iOS)
 import SwiftUI
 import AVFoundation
+import AVKit
 import CoreMotion
-import PhotosUI
 import UIKit
 
 struct CaptureView: View {
@@ -17,7 +17,6 @@ struct CaptureView: View {
     @State private var singleTake = false
     @State private var recordedURL: URL?
     @State private var error: String?
-    @State private var libraryItem: PhotosPickerItem?
     @State private var showingSettings = false
     @State private var showsFramingGuide = false
     @State private var showsAlignmentOverlay = true
@@ -25,6 +24,10 @@ struct CaptureView: View {
     @State private var isLoadingAlignmentOverlay = false
     @State private var alignmentSourceLabel: String?
     @State private var recordedOrientation: CaptureOrientation?
+    /// The instructional card. Auto-hides so it never covers the wall while the
+    /// framing it describes is being done; `?` brings it back.
+    @State private var showsFramingCard = true
+    @State private var framingCardTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -87,31 +90,62 @@ struct CaptureView: View {
                             .padding(20)
                             .frame(maxHeight: .infinity, alignment: .bottom)
                     }
+                    if camera.isRecording {
+                        VStack {
+                            recordingTimer.padding(.top, 14)
+                            Spacer()
+                        }
+                    }
+
+                    if showsFramingCard, !camera.isRecording {
+                        FramingCard()
+                    }
+
+                    // Floating over the preview's lower edge, with the black
+                    // control bar gone. Kept close to the bottom so it occludes
+                    // as little of a low start as possible, and with no scrim
+                    // behind it.
+                    VStack {
+                        Spacer()
+                        shutter.padding(.bottom, 24)
+                    }
                 }
                 .frame(maxHeight: .infinity)
                 .clipped()
-
-                captureControls
             }
         }
         .foregroundStyle(.white)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        // Volume buttons and, on the phones that have it, Camera Control — one
+        // API for both. Reaching the on-screen shutter means touching the
+        // tripod, which is the one thing the capture protocol asks you not to
+        // do between clips.
+        .onCameraCaptureEvent { event in
+            guard event.phase == .ended else { return }
+            toggleRecording()
+        }
         .sheet(isPresented: $showingSettings) { settingsSheet }
         .task {
             tilt.start()
             await camera.start()
             await loadAlignmentTarget()
+            showFramingCard()
         }
         .onDisappear {
+            framingCardTask?.cancel()
             camera.stop()
             tilt.stop()
         }
-        .onChange(of: libraryItem) { _, item in
-            guard let item else { return }
-            libraryItem = nil
-            model.beginImport(item, role: role)
-            dismiss()
+        .onChange(of: camera.isRecording) { _, recording in
+            // Never let the card sit over the wall while the wall is being
+            // filmed — the auto-hide usually gets there first, but a climber
+            // who presses record inside four seconds would otherwise film
+            // behind a panel.
+            if recording {
+                framingCardTask?.cancel()
+                showsFramingCard = false
+            }
         }
         .navigationDestination(item: $recordedURL) { url in
             SingleTakeSplitView(
@@ -122,101 +156,134 @@ struct CaptureView: View {
     }
 
     private var captureHeader: some View {
-        HStack(spacing: 22) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 25, weight: .light))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close camera")
+        VStack(spacing: 6) {
+            HStack(spacing: 16) {
+                Button {
+                    dismiss()
+                } label: {
+                    // A chevron, not the comp's arrow: every other back
+                    // affordance in the app is a chevron, and this screen only
+                    // draws its own because it hides the navigation bar to make
+                    // room for the progress bars and title.
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                // Visible but dead while recording. Stopping is the shutter's
+                // job; popping mid-recording would leave the file to be
+                // finalised on a view that is gone.
+                .disabled(camera.isRecording)
+                .opacity(camera.isRecording ? 0.35 : 0.8)
+                .accessibilityLabel("Back")
+                .accessibilityHint(camera.isRecording ? "Stop recording first" : "")
 
-            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 10) {
-                    Capsule()
-                        .fill(.white)
-                    Capsule()
-                        .fill(role == .attempt ? .white : .white.opacity(0.25))
+                    Capsule().fill(AppTheme.accent)
+                    Capsule().fill(role == .attempt ? AppTheme.accent : AppTheme.accent.opacity(0.25))
                 }
                 .frame(height: 8)
 
-                Text(role == .reference ? "Reference · 1 of 2" : "Attempt · 2 of 2")
-                    .font(.system(size: 14, weight: .medium))
+                Button {
+                    // Opens the settings form, which is the only home for the
+                    // countdown, single-take and overlay toggles. The framing
+                    // card shows itself on entry and needs no button of its
+                    // own; the form's Framing section repeats its advice for
+                    // anyone who missed it.
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 24, weight: .regular))
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Capture settings")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button {
-                showingSettings = true
-            } label: {
-                Image(systemName: "questionmark.circle")
-                    .font(.system(size: 26, weight: .regular))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Capture settings")
+            Text(role == .reference ? "Reference Climber" : "Your Climb")
+                .monoLabel(size: 18, weight: .medium)
         }
         .padding(.horizontal, 18)
         .frame(height: 84)
         .background(Color.black)
     }
 
-    private var captureControls: some View {
-        HStack {
-            PhotosPicker(selection: $libraryItem, matching: .videos) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.black.opacity(0.75))
-                    .frame(width: 52, height: 52)
-                    .background(.white.opacity(0.86), in: .rect(cornerRadius: 15))
-            }
-            .accessibilityLabel("Choose video from library")
-
-            Spacer()
-
-            Button {
+    /// The shutter, floating over the bottom of the preview.
+    ///
+    /// Four states, and only the idle one is lime. A disc that stayed lime while
+    /// recording is a bug nobody notices until a climb is lost.
+    private var shutter: some View {
+        Button(action: toggleRecording) {
+            ZStack {
                 if camera.isRecording {
-                    camera.stopRecording()
-                } else if !camera.isPreparingRecording {
-                    record()
-                }
-            } label: {
-                ZStack {
                     Circle()
                         .fill(.white)
                         .frame(width: 86, height: 86)
-
-                    if camera.isRecording {
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(.red)
-                            .frame(width: 34, height: 34)
-                    } else {
-                        Circle()
-                            .fill(.white.opacity(0.2))
-                            .frame(width: 68, height: 68)
-                            .overlay(Circle().stroke(.black.opacity(0.15), lineWidth: 1))
-                    }
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(.red)
+                        .frame(width: 34, height: 34)
+                } else {
+                    Circle()
+                        .fill(AppTheme.accent)
+                        .frame(width: 86, height: 86)
+                        .overlay(Circle().stroke(.black, lineWidth: 5))
                 }
             }
-            .buttonStyle(.plain)
-            .disabled((!camera.isRunning && !camera.isRecording) || camera.isPreparingRecording)
-            .opacity((camera.isRunning || camera.isRecording) && !camera.isPreparingRecording ? 1 : 0.45)
-            .accessibilityLabel(
-                camera.isPreparingRecording
-                    ? "Countdown in progress"
-                    : (camera.isRecording ? "Stop recording" : "Start recording")
-            )
-
-            Spacer()
-
-            Color.clear
-                .frame(width: 52, height: 52)
-                .accessibilityHidden(true)
         }
-        .padding(.horizontal, 58)
-        .frame(height: 174)
-        .background(Color.black)
+        .buttonStyle(.plain)
+        .disabled(!camera.isRunning && !camera.isRecording)
+        .opacity(camera.isRunning || camera.isRecording ? 1 : 0.45)
+        .accessibilityLabel(
+            camera.isPreparingRecording
+                ? "Cancel countdown"
+                : (camera.isRecording ? "Stop recording" : "Start recording")
+        )
+    }
+
+    /// One button, three meanings: idle starts, counting down cancels,
+    /// recording stops. Kept in one place so the shutter and the hardware
+    /// handler cannot disagree.
+    private func toggleRecording() {
+        if camera.isRecording {
+            camera.stopRecording()
+        } else if camera.isPreparingRecording {
+            camera.cancelCountdown()
+        } else {
+            record()
+        }
+    }
+
+    /// Elapsed recording time, read from the output rather than a wall clock so
+    /// it describes the file rather than the session.
+    private var recordingTimer: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 10, height: 10)
+                Text(Self.timecode(camera.recordedSeconds))
+                    .monoLabel(size: 15)
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.7), in: Capsule())
+        }
+    }
+
+    private static func timecode(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded(.down))
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    private func showFramingCard() {
+        framingCardTask?.cancel()
+        showsFramingCard = true
+        framingCardTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            showsFramingCard = false
+        }
     }
 
     private var settingsSheet: some View {
@@ -245,6 +312,10 @@ struct CaptureView: View {
                 }
 
                 SwiftUI.Section("Framing") {
+                    // The same three rules the framing card states on entry,
+                    // kept here because the card fades and this does not.
+                    Text("Full wall in frame · square to the wall · tripod fixed")
+                        .monoLabel(size: 12, weight: .regular)
                     Toggle("Show framing guide", isOn: $showsFramingGuide)
                     Text("Use the guide to keep the complete route and wall visible.")
                         .font(.caption)
@@ -406,6 +477,42 @@ private struct CaptureAlignmentGuide: View {
 }
 
 /// Task 0.0b — a grid and route-coverage marks for straight-on framing.
+/// Instructional, and distinct from ``FramingGuide``.
+///
+/// The guide is a *live* overlay whose keep-clear box exists because
+/// `WallAligner` registers on wall texture the climber is not standing in front
+/// of. This is three words of advice, shown once and then out of the way.
+private struct FramingCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let advice = ["Full Wall", "Front-On", "Use Tripod"]
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "camera.viewfinder")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(.white.opacity(0.75))
+
+            Text("Frame your shot")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+
+            // Plain monospaced text, no pills: the card is the surface.
+            HStack(spacing: 16) {
+                ForEach(advice.prefix(2), id: \.self) { chip in
+                    Text(chip).monoLabel(size: 14, weight: .regular)
+                }
+            }
+            Text(advice[2]).monoLabel(size: 14, weight: .regular)
+        }
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 26)
+        .padding(.vertical, 18)
+        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
+        .transition(reduceMotion ? .identity : .opacity)
+    }
+}
+
 struct FramingGuide: View {
     var body: some View {
         GeometryReader { geometry in
@@ -519,7 +626,13 @@ struct CameraPreview: UIViewRepresentable {
             super.init(frame: frame)
 
             clipsToBounds = true
-            previewLayer.videoGravity = .resizeAspectFill
+            // Fit, not fill: what the preview shows is exactly what the file
+            // contains. Filling would crop the preview while
+            // `AVCaptureMovieFileOutput` still wrote the full sensor frame, so
+            // the framing advice on this screen would be describing a frame
+            // nobody sees. Cropping the *recording* to match instead would throw
+            // away the side wall texture `WallAligner` registers on.
+            previewLayer.videoGravity = .resizeAspect
             layer.addSublayer(previewLayer)
 
             alignmentLayer.contentsGravity = .resizeAspectFill

@@ -24,6 +24,9 @@ final class CameraController: NSObject {
     nonisolated(unsafe) private let output = AVCaptureMovieFileOutput()
     private var device: AVCaptureDevice?
     private var continuation: CheckedContinuation<URL, Error>?
+    /// The in-flight `startRecording(afterSeconds:)`, so a second press during
+    /// the countdown can cancel it.
+    private var countdownTask: Task<Void, any Error>?
 
     var isRunning = false
     var isRecording = false
@@ -105,11 +108,11 @@ final class CameraController: NSObject {
         guard session.canAddInput(input) else { throw CaptureError.noCamera }
         session.addInput(input)
 
-        if let mic = AVCaptureDevice.default(for: .audio),
-           let audioInput = try? AVCaptureDeviceInput(device: mic),
-           session.canAddInput(audioInput) {
-            session.addInput(audioInput)
-        }
+        // **No audio input, deliberately.** Nothing downstream reads an audio
+        // track — the pipeline is pose over video frames — and recording one
+        // costs a microphone permission prompt on first run and writes the
+        // start beep into every clip. Clips imported from Photos may still
+        // carry audio; the app simply never produces any of its own.
 
         guard session.canAddOutput(output) else { throw CaptureError.recordingFailed("cannot add movie output") }
         session.addOutput(output)
@@ -214,11 +217,32 @@ final class CameraController: NSObject {
         // actually rolling, which is exactly when the climber has started.
         let location = Task { @MainActor [weak self] in await self?.attachLocationMetadata() }
 
-        for remaining in stride(from: delay, through: 1, by: -1) {
-            countdown = remaining
-            try? await Task.sleep(for: .seconds(1))
+        // Held in a property so a second press can cancel it. The sleep is
+        // `try`, not `try?`: swallowing cancellation would let a cancelled
+        // countdown run to zero and start recording anyway, which is the single
+        // most likely way to get this path wrong.
+        let ticking = Task { @MainActor in
+            for remaining in stride(from: delay, through: 1, by: -1) {
+                countdown = remaining
+                CaptureSound.tick()
+                // The final tick is the runway: capture opens underneath it, so
+                // the beep a second later means the file is already recording
+                // rather than about to be.
+                try await Task.sleep(for: .seconds(1))
+            }
         }
+        countdownTask = ticking
+        let counted = await ticking.result
+        countdownTask = nil
         countdown = nil
+        if case .failure = counted {
+            isPreparingRecording = false
+            // The location fetch was started early to overlap with the
+            // countdown; a cancel that ignores it leaves a fix running for a
+            // recording that will never happen.
+            location.cancel()
+            throw CaptureError.recordingFailed("cancelled")
+        }
 
         // Awaited rather than abandoned: `output.metadata` has to be set before
         // `startRecording`, or it is not in the file.
@@ -234,6 +258,25 @@ final class CameraController: NSObject {
             self.continuation = continuation
             output.startRecording(to: url, recordingDelegate: self)
         }
+    }
+
+    /// Cancels a countdown that has not opened a file yet.
+    ///
+    /// The boundary is `isRecording`: before it, nothing has been written and
+    /// this is a clean cancel; after it, the right verb is `stopRecording`.
+    func cancelCountdown() {
+        guard isPreparingRecording, !isRecording else { return }
+        countdownTask?.cancel()
+        countdownTask = nil
+    }
+
+    /// Elapsed duration of the recording in progress, read from the output.
+    ///
+    /// The real recorded duration rather than wall clock: a late start or a
+    /// dropped frame must not make the on-screen timer lie about the file.
+    var recordedSeconds: Double {
+        let d = output.recordedDuration.seconds
+        return d.isFinite && d > 0 ? d : 0
     }
 
     func stopRecording() {
@@ -265,6 +308,21 @@ final class CameraController: NSObject {
 }
 
 extension CameraController: AVCaptureFileOutputRecordingDelegate {
+    /// The beep fires here, not when the button was tapped.
+    ///
+    /// `AVCaptureMovieFileOutput` takes a few hundred milliseconds to open the
+    /// file. A climber reacting to a beep played before that is already moving
+    /// while nothing is being written, and the first move — the one that sets
+    /// everything downstream — is exactly what goes missing. Beeping from this
+    /// callback means the cue is true: you are being recorded.
+    nonisolated func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didStartRecordingTo fileURL: URL,
+        from connections: [AVCaptureConnection]
+    ) {
+        Task { @MainActor in CaptureSound.start() }
+    }
+
     nonisolated func fileOutput(
         _ output: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
@@ -273,6 +331,7 @@ extension CameraController: AVCaptureFileOutputRecordingDelegate {
     ) {
         Task { @MainActor in
             self.isRecording = false
+            self.countdownTask = nil
             self.lastRecordingURL = outputFileURL
             let continuation = self.continuation
             self.continuation = nil
