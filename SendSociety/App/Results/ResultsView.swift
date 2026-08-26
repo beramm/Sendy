@@ -1,5 +1,32 @@
 import SwiftUI
 
+/// How the skeleton button enters and leaves when the display mode changes.
+///
+/// It does not simply fade: it swings down and shrinks into its trailing edge
+/// while blurring, so the eye follows it out of the row instead of noticing a
+/// control has silently gone. Coming back it overshoots slightly, which reads
+/// as the row making room again.
+private struct SkeletonControlTransition: ViewModifier {
+    let folded: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(folded ? 0.35 : 1, anchor: .trailing)
+            .rotationEffect(.degrees(folded ? -14 : 0), anchor: .trailing)
+            .blur(radius: folded ? 6 : 0)
+            .opacity(folded ? 0 : 1)
+    }
+}
+
+extension AnyTransition {
+    static var skeletonControl: AnyTransition {
+        .modifier(
+            active: SkeletonControlTransition(folded: true),
+            identity: SkeletonControlTransition(folded: false)
+        )
+    }
+}
+
 private enum ResultsDisplayMode: String, CaseIterable, Identifiable {
     case sideBySide = "Side by Side"
     case overlay = "Overlay"
@@ -178,7 +205,16 @@ struct ResultsView: View {
                 HStack(spacing: 4) {
                     ForEach(ResultsDisplayMode.allCases) { mode in
                         Button {
-                            displayMode = mode
+                            // Animated because the skeleton button leaves with
+                            // this change, and the segmented control grows into
+                            // the space it vacates.
+                            // Bouncy on purpose: the strip is resizing, and a
+                            // little overshoot makes the segmented control read
+                            // as *taking* the space rather than the button
+                            // simply disappearing from it.
+                            withAnimation(.snappy(duration: 0.34, extraBounce: 0.28)) {
+                                displayMode = mode
+                            }
                         } label: {
                             Text(mode.rawValue)
                                 .font(.system(size: 17, weight: .regular))
@@ -204,32 +240,42 @@ struct ResultsView: View {
                 )
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Video display")
+                // The same detent tick the sequence strip uses, so switching
+                // mode feels like the same instrument.
+                .sensoryFeedback(.selection, trigger: displayMode)
 
-                Button {
-                    guard displayMode == .sideBySide else { return }
-                    skeletonEnabled.toggle()
-                } label: {
-                    Image("ResultsSkeleton")
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 25, height: 24)
-                        .foregroundStyle(
-                            skeletonIsActive
-                                ? Color.black
-                                : ResultsStyle.secondaryText
-                        )
-                        .frame(width: 58, height: 42)
-                        .background(
-                            skeletonIsActive ? AppTheme.accent : ResultsStyle.controlSurface,
-                            in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
-                        )
+                // Gone in Overlay, not merely inert. Overlay *is* the skeleton
+                // — the mode switches it on and refuses to switch it off — so a
+                // button that sits there looking lit and ignoring taps claims a
+                // choice the screen is not offering.
+                if displayMode == .sideBySide {
+                    Button {
+                        skeletonEnabled.toggle()
+                    } label: {
+                        Image("ResultsSkeleton")
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 25, height: 24)
+                            .foregroundStyle(
+                                skeletonIsActive
+                                    ? Color.black
+                                    : ResultsStyle.secondaryText
+                            )
+                            .frame(width: 58, height: 42)
+                            .background(
+                                skeletonIsActive ? AppTheme.accent : ResultsStyle.controlSurface,
+                                in: .rect(cornerRadius: ResultsStyle.controlCornerRadius)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Skeleton comparison")
+                    .accessibilityValue(skeletonIsActive ? "On" : "Off")
+                    // Folds away towards its trailing edge rather than fading
+                    // in place, so it reads as the control strip closing up
+                    // rather than a button going missing.
+                    .transition(.skeletonControl)
                 }
-                .buttonStyle(.plain)
-                .disabled(displayMode != .sideBySide)
-                .accessibilityLabel("Skeleton comparison")
-                .accessibilityValue(skeletonIsActive ? "On" : "Off")
-
                 Menu {
                     Toggle(isOn: $liveAnalytics) {
                         Label("Show Live Analytics", systemImage: "chart.xyaxis.line")
@@ -556,130 +602,142 @@ struct ResultsView: View {
             .disabled(position.sectionIndex == 0)
 
             GeometryReader { geometry in
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 8) {
-                            ForEach(sequences) { sequence in
-                                let selected = sequence.index == position.sectionIndex
-                                let containsFall = sequenceContainsFall(sequence, processed: processed)
-                                let hasDifferentMoveCount = sequence.moveCountDelta != 0
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(sequences) { sequence in
+                            let selected = sequence.index == position.sectionIndex
+                            let containsFall = sequenceContainsFall(sequence, processed: processed)
+                            let hasDifferentMoveCount = sequence.moveCountDelta != 0
 
-                                Button {
-                                    selectSequence(sequence.index, processed: processed)
-                                } label: {
-                                    Text("\(sequence.index + 1)")
-                                        .font(.system(
-                                            size: 17,
-                                            weight: selected ? .bold : .regular,
-                                            design: .monospaced
-                                        ))
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                        .foregroundStyle(sequenceForeground(
+                            Button {
+                                selectSequence(sequence.index, processed: processed)
+                            } label: {
+                                Text("\(sequence.index + 1)")
+                                    // Size and weight are what mark the
+                                    // selected chip — colour cannot, since
+                                    // green already means a differing move
+                                    // count and red means a fall.
+                                    .font(.system(
+                                        size: selected ? 23 : 17,
+                                        weight: selected ? .heavy : .regular,
+                                        design: .monospaced
+                                    ))
+                                    // Two-digit sequences still have to fit
+                                    // the chip at this size.
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .foregroundStyle(sequenceForeground(
+                                        containsFall: containsFall,
+                                        hasDifferentMoveCount: hasDifferentMoveCount
+                                    ))
+                                    .frame(
+                                        width: sequenceButtonWidth(
+                                            selected: selected,
+                                            hasDifferentMoveCount: hasDifferentMoveCount
+                                        ),
+                                        height: selected
+                                            ? SequenceChip.selectedHeight
+                                            : SequenceChip.height
+                                    )
+                                    .background(
+                                        sequenceBackground(
                                             containsFall: containsFall,
                                             hasDifferentMoveCount: hasDifferentMoveCount
-                                        ))
-                                        .frame(
-                                            width: sequenceButtonWidth(
-                                                selected: selected,
-                                                hasDifferentMoveCount: hasDifferentMoveCount
-                                            ),
-                                            height: selected ? 48 : 40
-                                        )
-                                        .background(
-                                            sequenceBackground(
-                                                containsFall: containsFall,
-                                                hasDifferentMoveCount: hasDifferentMoveCount
-                                            ),
-                                            in: .rect(cornerRadius: 15)
-                                        )
-                                        .animation(.snappy(duration: 0.2), value: selected)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Sequence \(sequence.index + 1) of \(sequences.count)")
-                                .accessibilityValue(sequenceAccessibilityValue(
-                                    containsFall: containsFall,
-                                    hasDifferentMoveCount: hasDifferentMoveCount
-                                ))
-                                .accessibilityAddTraits(selected ? .isSelected : [])
-                                .id(sequence.index)
+                                        ),
+                                        in: .rect(cornerRadius: 15)
+                                    )
+                                    .animation(.snappy(duration: 0.2), value: selected)
                             }
-                        }
-                        .frame(minHeight: 52)
-                        .scrollTargetLayout()
-                    }
-                    .scrollIndicators(.hidden)
-                    // Half a pane of empty space at each end, so *every* chip
-                    // can reach the middle. Without it a scroll can centre the
-                    // interior of the list and nothing else: there is no
-                    // content to the left of the first chip or the right of the
-                    // last, so those two stay pinned to their edge — and
-                    // sequence 1 is exactly where every run starts. As a
-                    // content margin rather than padding on the stack, so
-                    // `viewAligned` snapping measures from it and a chip comes
-                    // to rest in the middle instead of against the edge.
-                    .contentMargins(
-                        .horizontal,
-                        max(0, geometry.size.width / 2 - 36),
-                        for: .scrollContent
-                    )
-                    // The strip is a picker, not a filmstrip: it settles on a
-                    // chip rather than between two.
-                    .scrollTargetBehavior(.viewAligned)
-                    // **Scrolling selects.** Dragging a chip to the middle and
-                    // having nothing happen is the bug this closes — the middle
-                    // is where selection is *shown*, so it has to be where
-                    // selection is *made* too.
-                    .scrollPosition(id: $centredSequence, anchor: .center)
-                    .onChange(of: centredSequence) { _, id in
-                        guard let id, id != position.sectionIndex else { return }
-                        selectSequence(id, processed: processed)
-                    }
-                    // Fade the strip out at both ends instead of letting the
-                    // scroll view guillotine a chip mid-digit. The half-pane
-                    // insets guarantee there is always more list past the edge,
-                    // so something is always being cut — a chip dissolving into
-                    // the background reads as "the list continues", where a
-                    // hard vertical slice through a number reads as a layout
-                    // bug.
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .black, location: 0.07),
-                                .init(color: .black, location: 0.93),
-                                .init(color: .clear, location: 1)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    // Selection is marked by position, not by colour: the chosen
-                    // chip slides to the middle. Matched to the chip's own
-                    // `.snappy(duration: 0.2)` so growing and sliding read as one
-                    // movement.
-                    // Only for selections the scroll did not make itself —
-                    // a tap or a chevron. Without the guard the two directions
-                    // fight: a drag reports a new centre, that sets the
-                    // selection, and the selection scrolls the strip out from
-                    // under the finger that is still on it.
-                    .onChange(of: position.sectionIndex) { _, index in
-                        guard centredSequence != index else { return }
-                        withAnimation(.snappy(duration: 0.2)) {
-                            proxy.scrollTo(index, anchor: .center)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Sequence \(sequence.index + 1) of \(sequences.count)")
+                            .accessibilityValue(sequenceAccessibilityValue(
+                                containsFall: containsFall,
+                                hasDifferentMoveCount: hasDifferentMoveCount
+                            ))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .id(sequence.index)
                         }
                     }
-                    // A screen entered on a mid-list sequence starts centered
-                    // rather than scrolling into place after the fact. `task`
-                    // rather than `onAppear`: the first layout pass has not
-                    // placed the chips yet when `onAppear` fires, so the scroll
-                    // lands on nothing and sequence 1 stays at the leading edge.
-                    .task {
-                        centredSequence = position.sectionIndex
-                        proxy.scrollTo(position.sectionIndex, anchor: .center)
+                    .frame(minHeight: SequenceChip.selectedHeight + 4)
+                    .scrollTargetLayout()
+                }
+                .scrollIndicators(.hidden)
+                // Half a pane of empty space at each end, so *every* chip
+                // can reach the middle. Without it a scroll can centre the
+                // interior of the list and nothing else: there is no
+                // content to the left of the first chip or the right of the
+                // last, so those two stay pinned to their edge — and
+                // sequence 1 is exactly where every run starts. As a
+                // content margin rather than padding on the stack, so
+                // `viewAligned` snapping measures from it and a chip comes
+                // to rest in the middle instead of against the edge.
+                .contentMargins(
+                    .horizontal,
+                    max(0, geometry.size.width / 2 - SequenceChip.selectedWidth / 2),
+                    for: .scrollContent
+                )
+                // The strip is a picker, not a filmstrip: it settles on a
+                // chip rather than between two.
+                .scrollTargetBehavior(.viewAligned)
+                // **Scrolling selects.** Dragging a chip to the middle and
+                // having nothing happen is the bug this closes — the middle
+                // is where selection is *shown*, so it has to be where
+                // selection is *made* too.
+                .scrollPosition(id: $centredSequence, anchor: .center)
+                .onChange(of: centredSequence) { _, id in
+                    guard let id, id != position.sectionIndex else { return }
+                    selectSequence(id, processed: processed)
+                }
+                // Fade the strip out at both ends instead of letting the
+                // scroll view guillotine a chip mid-digit. The half-pane
+                // insets guarantee there is always more list past the edge,
+                // so something is always being cut — a chip dissolving into
+                // the background reads as "the list continues", where a
+                // hard vertical slice through a number reads as a layout
+                // bug.
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: 0.07),
+                            .init(color: .black, location: 0.93),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                // Selection is marked by position, not by colour: the chosen
+                // chip slides to the middle. Matched to the chip's own
+                // `.snappy(duration: 0.2)` so growing and sliding read as one
+                // movement.
+                //
+                // **Driven through the same `scrollPosition` binding a drag
+                // uses, not `ScrollViewProxy.scrollTo`.** `scrollTo` clamps
+                // to the content's own bounds and ignores `contentMargins`,
+                // so it could centre any interior chip but not the first or
+                // the last — selecting sequence 1 from sequence 3 left it
+                // pinned near the leading edge. The binding scrolls into the
+                // margins, which is exactly what they exist for.
+                //
+                // The guard keeps the two directions from fighting: a drag
+                // reports a new centre, that sets the selection, and the
+                // selection would otherwise scroll the strip out from under
+                // the finger still on it.
+                .onChange(of: position.sectionIndex) { _, index in
+                    guard centredSequence != index else { return }
+                    withAnimation(.snappy(duration: 0.2)) {
+                        centredSequence = index
                     }
                 }
+                // A screen entered on a mid-list sequence starts centred
+                // rather than scrolling into place after the fact. `task`
+                // rather than `onAppear`: the first layout pass has not
+                // placed the chips yet when `onAppear` fires.
+                .task { centredSequence = position.sectionIndex }
             }
-            .frame(height: 52)
+            .frame(height: SequenceChip.selectedHeight + 4)
 
             Button { selectSequence(position.sectionIndex + 1, processed: processed) } label: {
                 Image(systemName: "chevron.right")
@@ -888,13 +946,26 @@ struct ResultsView: View {
         return ResultsStyle.panelSurface
     }
 
+    /// The selected chip's size, in one place.
+    ///
+    /// The strip's content margins are derived from `selectedWidth` — they
+    /// reserve half a chip at each end so the middle is reachable — so a chip
+    /// resized without the margin following it lands visibly off centre.
+    enum SequenceChip {
+        static let selectedWidth: CGFloat = 80
+        static let selectedHeight: CGFloat = 54
+        static let width: CGFloat = 52
+        static let differingWidth: CGFloat = 64
+        static let height: CGFloat = 40
+    }
+
     private func sequenceButtonWidth(
         selected: Bool,
         hasDifferentMoveCount: Bool
     ) -> CGFloat {
-        if selected { return 72 }
-        if hasDifferentMoveCount { return 64 }
-        return 52
+        if selected { return SequenceChip.selectedWidth }
+        if hasDifferentMoveCount { return SequenceChip.differingWidth }
+        return SequenceChip.width
     }
 
     private func sequenceForeground(

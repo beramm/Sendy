@@ -10,13 +10,12 @@ struct ResultNumbersSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 5) {
-                Text("Detailed")
-                    .foregroundStyle(.white)
-                Text("Analytics")
-                    .foregroundStyle(AppTheme.accent)
-            }
-            .font(.system(size: 22, weight: .semibold))
+            // All white. Lime is the reference climber's colour on this screen,
+            // and a title wearing it says nothing — the rows below use the same
+            // green to mean something specific.
+            Text("Detailed Analytics")
+                .foregroundStyle(.white)
+                .font(.system(size: 22, weight: .semibold))
             .padding(.top, 34)
             .padding(.bottom, 24)
 
@@ -32,7 +31,7 @@ struct ResultNumbersSheet: View {
                 .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 24) {
+                    LazyVStack(spacing: 32) {
                         if !insight.comparisonIsValid {
                             Label {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -58,7 +57,7 @@ struct ResultNumbersSheet: View {
 
                         if !insight.additionalMetrics.isEmpty {
                             DisclosureGroup(isExpanded: $showingAllMetrics) {
-                                LazyVStack(spacing: 24) {
+                                LazyVStack(spacing: 32) {
                                     ForEach(insight.additionalMetrics, id: \.kind) { metric in
                                         MetricComparisonRow(
                                             metric: metric,
@@ -70,9 +69,9 @@ struct ResultNumbersSheet: View {
                             } label: {
                                 Text("Show all measurements (\(insight.additionalMetrics.count) more)")
                                     .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(AppTheme.accent)
+                                    .foregroundStyle(ResultsStyle.secondaryText)
                             }
-                            .tint(AppTheme.accent)
+                            .tint(ResultsStyle.secondaryText)
                             .padding(.top, 8)
                         }
 
@@ -138,13 +137,9 @@ private struct MetricComparisonRow: View {
                         .foregroundStyle(ResultsStyle.secondaryText)
                 }
 
-                valueBar(
-                    label: "YOU",
-                    value: metric.attempt,
-                    fraction: presentation.fraction(for: metric.attempt),
-                    color: ResultsStyle.attempt
-                )
-
+                // Reference first, you second: the reference is what the
+                // number is being read against, so it is the baseline the eye
+                // should meet before the comparison.
                 if comparisonIsValid {
                     valueBar(
                         label: "REFERENCE",
@@ -163,6 +158,13 @@ private struct MetricComparisonRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                valueBar(
+                    label: "YOU",
+                    value: metric.attempt,
+                    fraction: presentation.fraction(for: metric.attempt),
+                    color: ResultsStyle.attempt
+                )
             }
         }
         .accessibilityElement(children: .combine)

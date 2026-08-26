@@ -380,7 +380,13 @@ private struct FilledClipCard: View {
         if case .unusable = importState { return true } else { return false }
     }
 
-    private var accent: Color { isUnusable ? AppTheme.warning : AppTheme.accent }
+    /// Lime for the reference, cyan for you — the same legend the column
+    /// labels and the results panes use. Orange overrides both: an unusable
+    /// clip is a state, and it has to read as one whichever slot it is in.
+    private var accent: Color {
+        if isUnusable { return AppTheme.warning }
+        return video.role == .reference ? AppTheme.accent : AppTheme.you
+    }
 
     var body: some View {
         ZStack {
@@ -403,7 +409,9 @@ private struct FilledClipCard: View {
             if importState == .loading {
                 ProgressView()
                     .controlSize(.large)
-                    .tint(AppTheme.accent)
+                    // Same role colour as the border: a spinner has to say
+                    // which slot it belongs to.
+                    .tint(video.role == .reference ? AppTheme.accent : AppTheme.you)
                     .padding(22)
                     .background(.black.opacity(0.5), in: .circle)
             } else {
