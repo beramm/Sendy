@@ -198,7 +198,7 @@ struct ResultsView: View {
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Save and close climb")
+                .accessibilityLabel(model.sessionIsDraft ? "Save and close climb" : "Close results")
             }
 
             HStack(spacing: 10) {
@@ -1116,6 +1116,10 @@ struct ResultsView: View {
     private func closeResults() {
         isPlaying = false
         guard model.processed != nil else {
+            model.path.removeAll()
+            return
+        }
+        guard model.sessionIsDraft else {
             model.path.removeAll()
             return
         }
