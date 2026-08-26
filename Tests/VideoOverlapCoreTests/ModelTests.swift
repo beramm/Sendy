@@ -63,6 +63,13 @@ struct ModelTests {
         #expect(try roundTrip(session) == session)
     }
 
+    @Test("Climb grades cover V1 through V9")
+    func climbGradeRange() throws {
+        #expect(ClimbGrade.allCases.map(\.rawValue) == Array(1 ... 9))
+        #expect(ClimbGrade.v9.displayName == "V9")
+        #expect(try roundTrip(ClimbGrade.v9) == .v9)
+    }
+
     @Test("Sessions saved before grades existed still decode")
     func oldSessionWithoutGradeDecodes() throws {
         let encoded = try JSONEncoder().encode(ClimbSession(name: "legacy"))

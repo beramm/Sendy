@@ -2,7 +2,7 @@ import Foundation
 
 /// The bouldering grade the climber assigns when saving a comparison.
 ///
-/// The current artwork and save flow cover V1–V6. Keeping this as a typed
+/// The current artwork and save flow cover V1–V9. Keeping this as a typed
 /// value instead of embedding "V4" in the title lets the list and any future
 /// filters use the grade without parsing user-entered text.
 public enum ClimbGrade: Int, Sendable, Codable, Hashable, CaseIterable, Identifiable {
@@ -12,6 +12,9 @@ public enum ClimbGrade: Int, Sendable, Codable, Hashable, CaseIterable, Identifi
     case v4
     case v5
     case v6
+    case v7
+    case v8
+    case v9
 
     public var id: Int { rawValue }
     public var displayName: String { "V\(rawValue)" }
