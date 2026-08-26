@@ -25,7 +25,7 @@ private enum SessionCollectionLayout: String {
 struct SessionListView: View {
     @Environment(AppModel.self) private var model
     @State private var sessionToEdit: ClimbSession?
-    @AppStorage("sessionCollectionLayout") private var collectionLayout: SessionCollectionLayout = .list
+    @AppStorage("sessionCollectionLayout") private var collectionLayout: SessionCollectionLayout = .grid
     @State private var isSelecting = false
     @State private var selectedSessionIDs: Set<UUID> = []
     @State private var showingBulkDeleteConfirmation = false
