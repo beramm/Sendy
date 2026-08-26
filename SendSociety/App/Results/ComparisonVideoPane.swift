@@ -34,6 +34,12 @@ struct ComparisonVideoPane: View {
     /// user video or touching the on-disk session store.
     var showsPreviewArtwork = false
     var unavailableReason: String = "Not reached"
+    /// Expanded Results uses a centred title above the footage instead of the
+    /// compact in-pane REF/YOU badge.
+    var showsBadge = true
+    /// Supplied by the Results screen so both panes always show the same crop.
+    var zoomScale: CGFloat = 1
+    var panOffset: CGSize = .zero
 
     @State private var frames = VideoFrameLoader()
     @State private var url: URL?
@@ -42,19 +48,24 @@ struct ComparisonVideoPane: View {
         ZStack(alignment: .topLeading) {
             Color.white.opacity(0.10)
 
-            if showsPreviewArtwork {
-                ResultPreviewArtwork(role: video?.role ?? .reference)
-            } else {
-                if let image = frames.image {
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .scaledToFit()
+            Group {
+                if showsPreviewArtwork {
+                    ResultPreviewArtwork(role: video?.role ?? .reference)
                 } else {
-                    ProgressView()
-                        .tint(AppTheme.accent)
-                        .opacity(frameIndex == nil ? 0 : 1)
+                    if let image = frames.image {
+                        Image(decorative: image, scale: 1)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        ProgressView()
+                            .tint(AppTheme.accent)
+                            .opacity(frameIndex == nil ? 0 : 1)
+                    }
                 }
             }
+            .compositingGroup()
+            .scaleEffect(max(1, zoomScale))
+            .offset(panOffset)
 
             if frameIndex == nil, !showsPreviewArtwork {
                 Text(unavailableReason)
@@ -78,13 +89,15 @@ struct ComparisonVideoPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            Text(badgeLabel ?? title.uppercased())
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(badgeColor)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 34)
-                .background(ResultsStyle.badgeSurface, in: .capsule)
-                .padding(10)
+            if showsBadge {
+                Text(badgeLabel ?? title.uppercased())
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(badgeColor)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 34)
+                    .background(ResultsStyle.badgeSurface, in: .capsule)
+                    .padding(10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ResultsStyle.panelSurface)

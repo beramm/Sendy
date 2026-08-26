@@ -214,7 +214,8 @@ final class AppModel {
     /// A nil or empty name means the app names it. The session starts with a
     /// date name because the coordinate lives in the clips, which do not exist
     /// yet — it re-resolves in `persist` once a reference lands.
-    func newSession(name: String?) async {
+    @discardableResult
+    func newSession(name: String?) async -> Bool {
         let typed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let resolved: ResolvedSessionName = typed.isEmpty
             ? SessionNamer.dateName(Date())
@@ -235,8 +236,10 @@ final class AppModel {
             clearImportStates()
             path = [.setup]
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 

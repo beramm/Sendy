@@ -610,6 +610,11 @@ struct SkeletonOverlayPane: View {
     var badgeLabel: String? = nil
     var badgeColor: Color = .white
     var unavailableReason: String = "not reached"
+    /// Expanded Results owns the title and controls outside the footage.
+    var showsPaneLabel = true
+    /// Shared with the neighbouring pane by ResultsView.
+    var zoomScale: CGFloat = 1
+    var panOffset: CGSize = .zero
 
     @State private var frames = VideoFrameLoader()
     @State private var url: URL?
@@ -618,7 +623,7 @@ struct SkeletonOverlayPane: View {
 
     var body: some View {
         VStack(spacing: badgeLabel == nil ? 2 : 0) {
-            if badgeLabel == nil {
+            if badgeLabel == nil, showsPaneLabel {
                 Text(title).font(.caption2).foregroundStyle(.secondary)
             }
             GeometryReader { geometry in
@@ -628,33 +633,39 @@ struct SkeletonOverlayPane: View {
                 // assumed — otherwise every joint is offset by the letterbox.
                 let fitted = fittedRect(in: geometry.size)
                 ZStack(alignment: .topLeading) {
-                    if let image = frames.image {
-                        Image(decorative: image, scale: 1)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                    } else {
-                        Rectangle().fill(Color(.secondarySystemFill))
-                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    ZStack(alignment: .topLeading) {
+                        if let image = frames.image {
+                            Image(decorative: image, scale: 1)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                        } else {
+                            Rectangle().fill(Color(.secondarySystemFill))
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                        }
+                        SkeletonCanvas(
+                            referenceFrame: frame,
+                            referenceMetrics: metrics,
+                            referenceScale: scale,
+                            route: nil,
+                            // Holds and the backdrop are forced off here whatever
+                            // the toggles say: the wall is in the picture already.
+                            overlays: overlays.overFootage,
+                            // A video cannot be rescaled without distorting it, so
+                            // the skeleton is drawn where the joints actually are.
+                            normalizeBodyLength: false,
+                            drawsBackground: false,
+                            soloColour: colour,
+                            transform: transform,
+                            reportsTracking: false
+                        )
+                        .frame(width: fitted.width, height: fitted.height)
+                        .offset(x: fitted.minX, y: fitted.minY)
                     }
-                    SkeletonCanvas(
-                        referenceFrame: frame,
-                        referenceMetrics: metrics,
-                        referenceScale: scale,
-                        route: nil,
-                        // Holds and the backdrop are forced off here whatever
-                        // the toggles say: the wall is in the picture already.
-                        overlays: overlays.overFootage,
-                        // A video cannot be rescaled without distorting it, so
-                        // the skeleton is drawn where the joints actually are.
-                        normalizeBodyLength: false,
-                        drawsBackground: false,
-                        soloColour: colour,
-                        transform: transform,
-                        reportsTracking: false
-                    )
-                    .frame(width: fitted.width, height: fitted.height)
-                    .offset(x: fitted.minX, y: fitted.minY)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .compositingGroup()
+                    .scaleEffect(max(1, zoomScale))
+                    .offset(panOffset)
 
                     if frameIndex == nil {
                         Text(unavailableReason)
@@ -675,7 +686,7 @@ struct SkeletonOverlayPane: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     }
 
-                    if let badgeLabel {
+                    if showsPaneLabel, let badgeLabel {
                         Text(badgeLabel)
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundStyle(badgeColor)

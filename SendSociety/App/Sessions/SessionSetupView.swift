@@ -11,6 +11,7 @@ import SwiftUI
 
 struct SessionSetupView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(OnboardingStorage.completionKey) private var hasCompletedOnboarding = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var playback: PlaybackItem?
@@ -70,18 +71,20 @@ struct SessionSetupView: View {
         // gets a chance to confirm first.
         .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    if model.draftHasClips {
-                        confirmingDiscard = true
-                    } else {
-                        leave()
+            if hasCompletedOnboarding {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        if model.draftHasClips {
+                            confirmingDiscard = true
+                        } else {
+                            leave()
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
                     }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
+                    .accessibilityLabel("Back")
                 }
-                .accessibilityLabel("Back")
             }
         }
         .navigationTitle("")
