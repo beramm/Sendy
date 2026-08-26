@@ -14,6 +14,33 @@ public protocol PoseExtractor: Sendable {
         config: TuningConfig,
         progress: @Sendable @escaping (Double) -> Void
     ) async throws -> PoseSequence
+
+    /// Cheap presence check run at import: is there a climber in this clip at
+    /// all? Samples a handful of frames rather than decoding the whole file.
+    ///
+    /// It goes through this protocol rather than reaching for Vision directly
+    /// so pose stays a single vendor choice — a probe that called
+    /// `VNDetectHumanBodyPoseRequest` from the import path would plant a second,
+    /// hidden dependency on Vision outside this file.
+    func probe(url: URL, config: TuningConfig) async throws -> ClipProbe
+}
+
+/// The result of the import pre-flight.
+///
+/// `inconclusive` is the default and the safe answer. The banner it drives is
+/// for a **confident** negative only: refusing a good clip because a probe hit
+/// an unreadable file or ran out of memory is far worse than admitting a bad
+/// one, which the pipeline was going to judge anyway.
+public enum ClipProbe: Sendable, Equatable {
+    case climberFound
+    case noClimberFound
+    case inconclusive
+}
+
+public extension PoseExtractor {
+    /// Fails open. A source that cannot probe reports `inconclusive`, which
+    /// blocks nothing.
+    func probe(url: URL, config: TuningConfig) async throws -> ClipProbe { .inconclusive }
 }
 
 public enum PoseExtractionError: Error, LocalizedError {
@@ -163,6 +190,78 @@ public struct VisionPoseExtractor: PoseExtractor {
             sourceHeight: Int(displaySize.height.rounded()),
             warnings: warnings
         )
+    }
+
+    // MARK: Pre-flight
+
+    /// Samples frames across the middle of the clip and asks Vision whether a
+    /// person is in any of them.
+    ///
+    /// Deterministic on purpose. A random probe means the same file can pass on
+    /// one import and fail on the next, which is unreproducible on a gym floor
+    /// and undebuggable afterwards.
+    public func probe(url: URL, config: TuningConfig) async throws -> ClipProbe {
+        let asset = AVURLAsset(url: url)
+        guard (try? await asset.loadTracks(withMediaType: .video).first) != nil,
+              let duration = try? await asset.load(.duration).seconds,
+              duration.isFinite, duration > 0 else {
+            // Unreadable is not "no climber here".
+            return .inconclusive
+        }
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        // The generator applies the track transform itself, so the image handed
+        // to Vision is already display-oriented and needs no orientation of its
+        // own — unlike `extract`, which reads raw buffers.
+        generator.appliesPreferredTrackTransform = true
+        // A presence check, not a measurement: walking a whole GOP to land on an
+        // exact frame costs a decode per sample and buys nothing here.
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+
+        let trim = min(max(config.clipProbeTrimFraction, 0), 0.45)
+        let start = duration * trim
+        let end = duration * (1 - trim)
+        let span = max(end - start, 0)
+        let count = max(config.clipProbeSampleCount, 1)
+        let needed = max(config.clipProbeMinimumDetections, 1)
+
+        let request = VNDetectHumanBodyPoseRequest()
+        var detections = 0
+        var errored = 0
+
+        for i in 0 ..< count {
+            if Task.isCancelled { return .inconclusive }
+            // Even intervals across the trimmed middle. The head is where the
+            // climber has not arrived yet; the tail is where they have already
+            // topped out and walked back to the phone.
+            let t = count == 1 ? start + span / 2 : start + span * Double(i) / Double(count - 1)
+            guard let image = try? await generator.image(at: CMTime(seconds: t, preferredTimescale: 600)).image else {
+                errored += 1
+                continue
+            }
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            do {
+                try handler.perform([request])
+                let best = (request.results ?? []).max(by: { $0.confidence < $1.confidence })
+                if let best, Double(best.confidence) >= config.clipProbeConfidenceFloor {
+                    detections += 1
+                    // Stop early: the question is only whether anybody is here.
+                    if detections >= needed { return .climberFound }
+                }
+            } catch {
+                // Vision itself refusing counts as "could not tell", not as an
+                // empty wall. `VNDetectHumanBodyPoseRequest` cannot even be set
+                // up in the Simulator, so this is the ordinary path there.
+                errored += 1
+            }
+        }
+
+        if detections >= needed { return .climberFound }
+        // Every sample failing is a broken read or an unavailable model, not an
+        // empty wall.
+        if errored == count { return .inconclusive }
+        return .noClimberFound
     }
 
     // MARK: Vision plumbing

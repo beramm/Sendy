@@ -11,15 +11,15 @@ import SwiftUI
 
 struct SessionSetupView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
 
     @State private var playback: PlaybackItem?
-    @State private var trimmingVideo: VideoRef?
-    @State private var editedName = ""
-    /// Focus on the name field, so something other than the keyboard's own
-    /// return key can let go of it. Without this the keyboard covers the
-    /// Compare button and the only way out is the return key — a dead end on a
-    /// screen whose whole job is to get you to that button.
-    @FocusState private var nameFocused: Bool
+    /// Which slot is adding a clip. The **role**, not a boolean: one shared
+    /// `isPresented` for two slots is the same bug the per-role import states
+    /// were introduced to remove.
+    @State private var addingClip: VideoRef.Role?
+    @State private var removing: VideoRef?
+    @State private var confirmingDiscard = false
 
     var body: some View {
         ZStack {
@@ -30,168 +30,170 @@ struct SessionSetupView: View {
                     .font(.system(size: 40, weight: .bold))
                     .padding(.bottom, 6)
 
-                sessionName
-                    .padding(.bottom, 40)
+                Text("One Problem. Two Climbs")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.bottom, 24)
 
-                HStack(alignment: .top, spacing: 24) {
-                    clipColumn(
-                        role: .reference,
-                        title: "Reference",
-                        video: model.session?.reference
-                    )
-                    clipColumn(
-                        role: .attempt,
-                        title: "Attempt",
-                        video: model.session?.attempts.first
-                    )
+                if let message = model.unusableClipMessage {
+                    UnusableClipBanner(headline: message.headline, message: message.body)
+                        .padding(.bottom, 24)
+                }
+
+                HStack(alignment: .top, spacing: 20) {
+                    clipColumn(role: .reference)
+                    clipColumn(role: .attempt)
                 }
                 .frame(maxWidth: .infinity)
 
-                Spacer(minLength: 48)
-
-                Text(statusText)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
-                    // Importing only. A pulse means work in progress; pulsing a
-                    // settled "Ready to compare" claims the app is busy when it
-                    // is not.
-                    .pulsing(model.isImporting)
-                    .padding(.bottom, 36)
+                Spacer(minLength: 32)
 
                 compareButton
+
+                Text(statusText)
+                    .font(.system(size: 15, weight: .regular))
+                    // Raised while work is in flight: a line that is both dim
+                    // and fading is invisible twice over.
+                    .foregroundStyle(.white.opacity(model.isImporting ? 0.7 : 0.4))
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .pulsing(model.isImporting)
+                    .padding(.top, 14)
             }
             .padding(.horizontal, 16)
             .padding(.top, 22)
             .padding(.bottom, 28)
         }
-        // The keyboard overlays this screen rather than resizing it. `ClipCard`
-        // sizes itself from the available height via `.aspectRatio(_:.fit)`, so
-        // letting the keyboard eat half the height shrank the cards vertically
-        // and — because the ratio is fixed — dragged their width down with it,
-        // collapsing two video thumbnails into small ovals. Nothing here needs
-        // to move out of the keyboard's way: the name field is at the top, and
-        // the Compare button it covers is reachable the moment the keyboard is
-        // dismissed, which the tap gesture below and the return key both do.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        // A tap anywhere that isn't a control drops the keyboard. Buttons and
-        // the field itself still get their taps first — this only catches what
-        // nothing else claimed.
-        .contentShape(Rectangle())
-        .onTapGesture { nameFocused = false }
         .foregroundStyle(.white)
+        // The system back cannot ask before it pops, and popping is what
+        // destroys an unsaved draft's clips. Same chevron, same place — it just
+        // gets a chance to confirm first.
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    if model.draftHasClips {
+                        confirmingDiscard = true
+                    } else {
+                        leave()
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .accessibilityLabel("Back")
+            }
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: model.session?.id) { editedName = model.session?.name ?? "" }
-        .onChange(of: model.session?.name) { _, name in editedName = name ?? "" }
+        .confirmationDialog(
+            "Discard this climb?",
+            isPresented: $confirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard climb", role: .destructive) { leave() }
+            Button("Keep editing", role: .cancel) {}
+        } message: {
+            Text("The clips you added will be deleted. Nothing has been saved yet.")
+        }
+        .sheet(item: $addingClip) { role in
+            AddClipSheet(role: role)
+        }
         .sheet(item: $playback) { item in
             ClipPlaybackView(url: item.url)
         }
     }
 
+    private func leave() {
+        Task {
+            await model.discardDraft()
+            dismiss()
+        }
+    }
+
+    // MARK: Columns
+
     @ViewBuilder
-    private func clipColumn(
-        role: VideoRef.Role,
-        title: String,
-        video: VideoRef?
-    ) -> some View {
+    private func clipColumn(role: VideoRef.Role) -> some View {
         let importState = model.importState(for: role)
+        let video = model.video(for: role)
 
-        VStack(alignment: .leading, spacing: 8) {
-            HStack() {
-                Text(title)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(video == nil ? .secondary : .primary)
-                    .lineLimit(1)
-
-                Spacer( )
-
-                if let video {
-                    Menu {
-                        Button(role: .destructive) {
-                            Task { await model.removeVideo(video) }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(.white)
-                    }
-                    .accessibilityLabel("Options for \(title)")
-                }
-            }
-            .frame(height: 25)
+        VStack(spacing: 10) {
+            Text(role == .reference ? "REFERENCE" : "YOU")
+                .font(.system(size: 19, weight: .bold))
+                // Always coloured. The pair is a legend for the results screen,
+                // not a state indicator — the slot's border says the state.
+                .foregroundStyle(role == .reference ? AppTheme.accent : AppTheme.you)
+                .lineLimit(1)
 
             if let video {
-                ClipCard(
+                FilledClipCard(
                     video: video,
                     importState: importState,
-                    play: { play(video) }
+                    play: { play(video) },
+                    remove: { removing = video },
+                    replace: {
+                        Task {
+                            await model.removeVideo(video)
+                            addingClip = role
+                        }
+                    }
                 )
             } else {
-                NavigationLink {
-                    CaptureView(role: role)
+                Button {
+                    addingClip = role
                 } label: {
                     EmptyClipCard(importState: importState)
                 }
                 .buttonStyle(.plain)
                 .disabled(importState == .loading)
-                .accessibilityLabel("Add \(title) video")
+                .accessibilityLabel(
+                    role == .reference ? "Add reference climb" : "Add your climb"
+                )
             }
 
-            if case .failed(let message) = importState {
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
-            }
+            // Present whether or not the slot is filled. With one clip down and
+            // one to go, "Your go at the same problem" is doing exactly the
+            // teaching it was added for — and a caption that vanished on fill
+            // would make the two columns different heights.
+            Text(
+                role == .reference
+                    ? "The climber you\nwant to learn from"
+                    : "Your go at the\nsame problem"
+            )
+            .font(.system(size: 13))
+            .foregroundStyle(.white.opacity(0.6))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        // Give both HStack children the same ideal width before they expand.
-        // This keeps the two aspect-ratio-driven cards exactly the same size.
         .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity)
-    }
-
-    /// The session's name, editable in place.
-    ///
-    /// Renaming is the correction mechanism for the whole naming feature: it
-    /// locks the name against any later resolve, and it teaches the placemark
-    /// cache, so the next session at this gym inherits the climber's name
-    /// rather than Apple's label for the building.
-    private var sessionName: some View {
-        TextField("Session name", text: $editedName)
-            .font(.system(size: 18, weight: .medium))
-            .textFieldStyle(.plain)
-            .focused($nameFocused)
-            .submitLabel(.done)
-            .onSubmit { nameFocused = false }
-            // Commit on *losing focus* rather than on submit, so a name
-            // typed and then tapped away from is kept. Committing only on
-            // submit silently discarded the edit by every other exit.
-            .onChange(of: nameFocused) { _, focused in
-                guard !focused else { return }
-                let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
-                // An emptied field is an abandoned edit, not a request for
-                // a nameless session. `renameSession` refuses it either
-                // way; this puts the real name back on screen.
-                guard !trimmed.isEmpty else {
-                    editedName = model.session?.name ?? ""
-                    return
+        .confirmationDialog(
+            "Remove this climb?",
+            isPresented: .init(
+                get: { removing?.role == role },
+                set: { if !$0 { removing = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove climb", role: .destructive) {
+                if let video = removing {
+                    Task { await model.removeVideo(video) }
                 }
-                Task { await model.renameSession(to: editedName) }
+                removing = nil
             }
+            Button("Cancel", role: .cancel) { removing = nil }
+        } message: {
+            Text("The clip is deleted from this climb. Any comparison already run is discarded with it.")
+        }
     }
 
     private var statusText: String {
-        if model.isImporting { return "Preparing your clip…" }
-        if model.canProcess { return "Ready to compare" }
-        return "One more clip to go"
+        model.blockedReason ?? "Ready to compare"
     }
 
     private var compareButton: some View {
         PrimaryButton(
-            title: "Compare",
+            title: "COMPARE NOW",
             isEnabled: model.canProcess,
             disabledHint: model.blockedReason ?? "Starts the comparison",
             action: {
@@ -212,66 +214,246 @@ struct SessionSetupView: View {
     }
 }
 
-private struct ClipCard: View {
+// MARK: - Banner
+
+/// The unusable-clip banner. Names the slot that failed — never a fixed string,
+/// or the words and the orange border can disagree.
+private struct UnusableClipBanner: View {
+    let headline: String
+    let message: String
+
+    private let advice = ["FRONT-ON", "WHOLE WALL", "CLIMBER IN FRAME"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppTheme.warning)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(headline)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(AppTheme.warning)
+                    Text(message)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            // Same three rules as the capture screen's framing card, from
+            // `capture-protocol.md`.
+            FlowLayout(spacing: 8) {
+                ForEach(advice, id: \.self) { chip in
+                    Text(chip)
+                        .monoLabel(size: 11)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.white.opacity(0.08), in: Capsule())
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(AppTheme.warning.opacity(0.8), lineWidth: 1)
+        }
+    }
+}
+
+/// Wraps chips onto as many lines as they need. Three short strings fit two
+/// lines on every phone, and at accessibility sizes they keep wrapping rather
+/// than clipping.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+// MARK: - Slots
+
+private enum SlotStyle {
+    static let cornerRadius: CGFloat = 12
+    static let aspectRatio: CGFloat = 0.49
+}
+
+private struct EmptyClipCard: View {
+    let importState: ClipImportState
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: SlotStyle.cornerRadius)
+                .fill(AppTheme.slotSurface)
+
+            RoundedRectangle(cornerRadius: SlotStyle.cornerRadius)
+                // Raised from the comp's 0.3: on OLED black in a bright gym,
+                // this dashed line is the only thing marking the tap target.
+                .strokeBorder(
+                    .white.opacity(0.45),
+                    style: StrokeStyle(lineWidth: 2, dash: [4, 4])
+                )
+
+            if importState == .loading {
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(AppTheme.accent)
+                    Text("Loading")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 40, weight: .light))
+                    Text("Add climb")
+                        .font(.system(size: 15))
+                }
+                .foregroundStyle(.white.opacity(0.4))
+            }
+
+            if case .failed(let message) = importState {
+                VStack {
+                    Spacer()
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.warning)
+                        .multilineTextAlignment(.center)
+                        .padding(8)
+                }
+            }
+        }
+        .aspectRatio(SlotStyle.aspectRatio, contentMode: .fit)
+    }
+}
+
+/// A slot with a clip in it. Three separate affordances, and they do not
+/// collide: the thumbnail plays, the badge is status only, and the pill is the
+/// one control.
+private struct FilledClipCard: View {
     @Environment(AppModel.self) private var model
     let video: VideoRef
     let importState: ClipImportState
     let play: () -> Void
+    let remove: () -> Void
+    let replace: () -> Void
 
     @State private var thumbnail: CGImage?
 
+    private var isUnusable: Bool {
+        if case .unusable = importState { return true } else { return false }
+    }
+
+    private var accent: Color { isUnusable ? AppTheme.warning : AppTheme.accent }
+
     var body: some View {
-        Button(action: play) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 27)
-                    .fill(Color.white.opacity(0.20))
+        ZStack {
+            RoundedRectangle(cornerRadius: SlotStyle.cornerRadius)
+                .fill(AppTheme.slotSurface)
 
-                if let thumbnail {
-                    // The thumbnail must not be allowed to size the card.
-                    // `scaledToFill` reports the overflowing size it needs to
-                    // cover the proposal, and a `ZStack` takes the union of its
-                    // children — so a clip wider than 0.52 grew the card past
-                    // the aspect ratio the empty card obeys, pushed the whole
-                    // row outside the screen's horizontal padding, and left the
-                    // filled column visibly misaligned with the title above it.
-                    // `Color.clear` accepts exactly the proposal, and an
-                    // overlay is sized to its parent, so the image can overflow
-                    // and be clipped without ever driving layout.
-                    Color.clear
-                        .overlay {
-                            Image(decorative: thumbnail, scale: 1)
-                                .resizable()
-                                .scaledToFill()
-                        }
-                        .clipped()
-                }
+            if let thumbnail {
+                Color.clear
+                    .overlay {
+                        Image(decorative: thumbnail, scale: 1)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    // Dimmed so the badge stays readable over arbitrary
+                    // footage. Not a mistake to be corrected later.
+                    .opacity(0.7)
+                    .clipShape(RoundedRectangle(cornerRadius: SlotStyle.cornerRadius))
+            }
 
-                Color.black.opacity(thumbnail == nil ? 0 : 0.18)
+            if importState == .loading {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(AppTheme.accent)
+                    .padding(22)
+                    .background(.black.opacity(0.5), in: .circle)
+            } else {
+                Image(systemName: isUnusable ? "xmark" : "checkmark")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 47, height: 47)
+                    .background(accent, in: .circle)
+                    // Status, not a control: the tap belongs to the thumbnail
+                    // underneath it.
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
 
-                if importState == .loading {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(AppTheme.accent)
-                        .padding(22)
-                        .background(.black.opacity(0.5), in: .circle)
+            VStack {
+                Spacer()
+                if isUnusable {
+                    // A clip the app has just declared unusable is not worth
+                    // protecting, so this is one step and no confirmation.
+                    Button(action: replace) {
+                        pill("Replace", foreground: .black, background: AppTheme.warning)
+                    }
+                    .buttonStyle(.plain)
                 } else {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 66, height: 66)
-                        .background(.black.opacity(0.38), in: .circle)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                        .shadow(radius: 5)
+                    Button(action: remove) {
+                        pill("Remove", foreground: .white.opacity(0.7), background: .black.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 27))
-            .contentShape(RoundedRectangle(cornerRadius: 27))
+            .padding(.bottom, 16)
         }
-        .buttonStyle(.plain)
-        .disabled(importState == .loading)
-        .aspectRatio(0.52, contentMode: .fit)
-        .task(id: video.id) { await loadThumbnail() }
+        .aspectRatio(SlotStyle.aspectRatio, contentMode: .fit)
+        .overlay {
+            // `strokeBorder`, not `stroke`: a centred 3pt line would make this
+            // column half a point wider than its neighbour.
+            RoundedRectangle(cornerRadius: SlotStyle.cornerRadius)
+                .strokeBorder(accent, lineWidth: 3)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: SlotStyle.cornerRadius))
+        .onTapGesture(perform: play)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Play \(video.label)")
+        .task(id: video.id) { await loadThumbnail() }
+    }
+
+    private func pill(_ title: String, foreground: Color, background: Color) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .background(background, in: Capsule())
     }
 
     private func loadThumbnail() async {
@@ -284,36 +466,7 @@ private struct ClipCard: View {
     }
 }
 
-private struct EmptyClipCard: View {
-    let importState: ClipImportState
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 27)
-                .fill(Color.white.opacity(0.04))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 27)
-                        .stroke(AppTheme.accent, lineWidth: 2)
-                }
-
-            if importState == .loading {
-                VStack(spacing: 14) {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(AppTheme.accent)
-                    Text("Loading")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Image(systemName: "plus")
-                    .font(.system(size: 46, weight: .light))
-                    .foregroundStyle(AppTheme.accent)
-            }
-        }
-        .aspectRatio(0.52, contentMode: .fit)
-    }
-}
+// MARK: - Playback
 
 private struct PlaybackItem: Identifiable {
     let id = UUID()
@@ -402,5 +555,21 @@ private struct SignpostedVideoPlayer: View {
 
 #Preview("Compare · ready") {
     FlowPreviewContainer(session: FlowPreviewData.ready) { SessionSetupView() }
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Compare · unusable clip") {
+    FlowPreviewContainer(
+        session: FlowPreviewData.ready,
+        attemptImport: .unusable("Sendy didn't find a climber in that video.")
+    ) { SessionSetupView() }
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Compare · importing") {
+    FlowPreviewContainer(
+        session: FlowPreviewData.oneClip,
+        attemptImport: .loading
+    ) { SessionSetupView() }
         .preferredColorScheme(.dark)
 }

@@ -232,4 +232,35 @@ struct TuningConfigCompatibilityTests {
         #expect(saved.grade == .v4)
     }
 
+    @Test("The sweep collects abandoned drafts and spares saved sessions")
+    func sweepRemovesOnlyDrafts() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let abandoned = try await store.createDraft(name: "Never finished")
+        var saved = try await store.createDraft(name: "Finished")
+        try await store.save(saved)
+        saved.name = "Finished"
+
+        await store.sweepAbandonedDrafts()
+
+        let fm = FileManager.default
+        #expect(!fm.fileExists(atPath: await store.directory(for: abandoned.id).path))
+        #expect(fm.fileExists(atPath: await store.directory(for: saved.id).path))
+        #expect(await store.listSessions().count == 1)
+    }
+
+    @Test("The sweep spares the draft currently being filled in")
+    func sweepSparesLiveDraft() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent("VOTest-\(UUID().uuidString)")
+        let store = SessionStore(root: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let live = try await store.createDraft(name: "In progress")
+        await store.sweepAbandonedDrafts(keeping: live.id)
+
+        #expect(FileManager.default.fileExists(atPath: await store.directory(for: live.id).path))
+    }
+
 }

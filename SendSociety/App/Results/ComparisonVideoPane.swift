@@ -8,7 +8,7 @@ enum ResultsStyle {
     static let panelSurface = Color(red: 0.105, green: 0.105, blue: 0.115)
     static let badgeSurface = Color.black.opacity(0.68)
     static let reference = AppTheme.accent
-    static let attempt = Color(red: 0.0, green: 0.72, blue: 0.96)
+    static let attempt = AppTheme.you
     static let secondaryText = Color.white.opacity(0.58)
     static let sheetSurface = Color(red: 0.18, green: 0.18, blue: 0.19)
     static let controlCornerRadius: CGFloat = 18

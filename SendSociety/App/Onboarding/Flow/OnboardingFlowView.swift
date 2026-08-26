@@ -1,7 +1,19 @@
 import SwiftUI
 
 enum OnboardingConfiguration {
-    static let alwaysShowOnLaunch = true
+    /// Debug override: replay onboarding on every launch.
+    ///
+    /// **Read from a launch argument, not a hardcoded constant.** As a constant
+    /// it was committed in the on position, which silently overrode
+    /// `hasCompletedOnboarding` and made onboarding run on every launch on a
+    /// real phone. A flag that has to be typed to be enabled cannot be left on
+    /// by accident.
+    ///
+    /// Enable it by adding `--show-onboarding` to the scheme's launch
+    /// arguments, or `xcrun simctl launch <device> <bundle-id> --show-onboarding`.
+    static var alwaysShowOnLaunch: Bool {
+        ProcessInfo.processInfo.arguments.contains("--show-onboarding")
+    }
 }
 
 enum OnboardingStep: Int, CaseIterable {

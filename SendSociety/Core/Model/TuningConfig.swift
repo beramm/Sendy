@@ -298,6 +298,35 @@ public struct TuningConfig: Sendable, Codable, Hashable {
     /// Below this share of covered pixels the plate is reported as ghosting.
     public var wallPlateCoverageFloor: Double = 0.97
 
+    // MARK: Clip pre-flight
+
+    /// Frames sampled at import to answer one question: is there a climber in
+    /// this clip at all? Seek-sampled with a generous tolerance — this is a
+    /// presence check, not a measurement, so a nearby keyframe is a fine sample.
+    public var clipProbeSampleCount: Int = 10
+    /// Share of the duration skipped at each end before sampling.
+    ///
+    /// The opening seconds are the most reliably empty part of a climbing clip
+    /// — the climber is still walking over or chalking up — and the tail is
+    /// worse, because a clip routinely keeps rolling while they walk back to
+    /// the phone.
+    public var clipProbeTrimFraction: Double = 0.10
+    /// Confident detections needed to pass. **A count, not a fraction.**
+    ///
+    /// A fraction rejects good climbs: a climber who tops out and walks back to
+    /// stop the recording is absent for the whole tail, so half a clip having
+    /// nobody in it is normal. One detection is too few — a single false
+    /// positive should not qualify a clip of an empty wall. Two says a person
+    /// is present, which is the only question being asked.
+    ///
+    /// The asymmetry sets the value: a false accept costs one pipeline run that
+    /// was going to be the real judge anyway; a false reject tells a climber
+    /// their send was unusable and sends them back up a wall they may not be
+    /// able to climb again today.
+    public var clipProbeMinimumDetections: Int = 2
+    /// Pose confidence a sampled frame must clear to count as a detection.
+    public var clipProbeConfidenceFloor: Double = 0.30
+
     public init() {}
 
     // MARK: Debug panel metadata
@@ -456,7 +485,12 @@ public struct TuningConfig: Sendable, Codable, Hashable {
         .init(group: "Wall backdrop", label: "Samples", help: "Frames medianed into the clean plate", kind: .int(\.wallPlateSampleCount, range: 4 ... 48)),
         .init(group: "Wall backdrop", label: "Mask padding", help: "Grown around the joint box — Vision has no fingers or toes", kind: .double(\.wallPlateMaskPadding, range: 0 ... 0.3, step: 0.01)),
         .init(group: "Wall backdrop", label: "Max dimension (px)", help: "Long side of the plate", kind: .int(\.wallPlateMaxDimension, range: 128 ... 1024)),
-        .init(group: "Wall backdrop", label: "Coverage floor", help: "Below this share of unoccluded pixels, warn about ghosting", kind: .double(\.wallPlateCoverageFloor, range: 0 ... 1, step: 0.01))
+        .init(group: "Wall backdrop", label: "Coverage floor", help: "Below this share of unoccluded pixels, warn about ghosting", kind: .double(\.wallPlateCoverageFloor, range: 0 ... 1, step: 0.01)),
+
+        .init(group: "Clip pre-flight", label: "Samples", help: "Frames checked at import for a climber", kind: .int(\.clipProbeSampleCount, range: 2 ... 40)),
+        .init(group: "Clip pre-flight", label: "End trim", help: "Share of the clip skipped at each end — climbers walk in and walk off", kind: .double(\.clipProbeTrimFraction, range: 0 ... 0.4, step: 0.01)),
+        .init(group: "Clip pre-flight", label: "Detections to pass", help: "A count, not a fraction: an empty tail is normal footage", kind: .int(\.clipProbeMinimumDetections, range: 1 ... 10)),
+        .init(group: "Clip pre-flight", label: "Confidence floor", help: "Pose confidence a sampled frame must clear", kind: .double(\.clipProbeConfidenceFloor, range: 0 ... 1, step: 0.01))
     ]
 
     public subscript(double field: WritableKeyPath<TuningConfig, Double>) -> Double {

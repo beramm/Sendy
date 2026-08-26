@@ -56,27 +56,20 @@ struct SessionListView: View {
                     // the gym once a located clip lands.
                     Task { await model.newSession(name: nil) }
                 } label: {
+                    // Centred, and with the gradient's radius equal to the
+                    // circle's. Anchored at `.leading` with twice the radius,
+                    // the pale stop fell outside the button entirely, so it
+                    // rendered as a flat green slab instead of a glow.
                     Image(systemName: "plus")
-                        .font(.system(size: 26, weight: .semibold))
+                        .font(.system(size: 32, weight: .bold))
                         .foregroundStyle(AppTheme.background)
                         .frame(width: 64, height: 64)
                         .background(
                             RadialGradient(
-                                colors: [
-                                    Color(
-                                        red: 188.0 / 255.0,
-                                        green: 247.0 / 255.0,
-                                        blue: 0
-                                    ),
-                                    Color(
-                                        red: 234.0 / 255.0,
-                                        green: 250.0 / 255.0,
-                                        blue: 182.0 / 255.0
-                                    ),
-                                ],
-                                center: .leading,
+                                colors: [AppTheme.accentCore, AppTheme.accentEdge],
+                                center: .center,
                                 startRadius: 0,
-                                endRadius: 64
+                                endRadius: 32
                             ),
                             in: Circle()
                         )
@@ -184,7 +177,7 @@ struct SessionListView: View {
                         .month(.twoDigits)
                         .year(.twoDigits)
                 )
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                .monoLabel(size: 13, weight: .regular)
                 .foregroundStyle(.secondary)
             }
             Spacer()
@@ -213,17 +206,21 @@ struct FlowPreviewContainer<Content: View>: View {
     init(
         session: ClimbSession? = nil,
         sessions: [ClimbSession] = [],
+        referenceImport: ClipImportState = .idle,
+        attemptImport: ClipImportState = .idle,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.session = session
         self.sessions = sessions
         self.content = content
-        _model = State(
-            initialValue: AppModel(
-                previewSession: session,
-                previewSessions: sessions
-            )
-        )
+        let model = AppModel(previewSession: session, previewSessions: sessions)
+        // Slot states are settable here so the failed and importing cases can be
+        // previewed. Vision's body-pose request cannot even be constructed in
+        // the Simulator, so the pre-flight always fails open there and the
+        // unusable state is otherwise unreachable outside a device.
+        model.referenceImport = referenceImport
+        model.attemptImport = attemptImport
+        _model = State(initialValue: model)
     }
 
     var body: some View {

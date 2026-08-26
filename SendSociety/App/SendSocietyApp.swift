@@ -32,10 +32,16 @@ struct RootView: View {
     /// the write, and keeps `--show-onboarding` from looping straight back into
     /// the flow it just finished.
     @State private var completedOnboardingThisLaunch = false
+    /// Cleared by `SplashView` once it has had its beat. Not persisted: the
+    /// splash belongs to a cold start, and a relaunch is a cold start.
+    @State private var showingSplash = true
 
     var body: some View {
         Group {
-            if shouldShowOnboarding {
+            if showingSplash {
+                SplashView { showingSplash = false }
+                    .transition(.opacity)
+            } else if shouldShowOnboarding {
                 OnboardingFlowView {
                     hasCompletedOnboarding = true
                     completedOnboardingThisLaunch = true
@@ -48,6 +54,7 @@ struct RootView: View {
                         .navigationDestination(for: AppRoute.self) { route in
                             switch route {
                             case .setup: SessionSetupView()
+                            case .capture(let role): CaptureView(role: role)
                             case .processing: ProcessingView()
                             case .results: ResultsView()
                             case .report: PipelineReportView()
@@ -58,6 +65,7 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.35), value: shouldShowOnboarding)
+        .animation(.easeInOut(duration: 0.35), value: showingSplash)
     }
 
     /// First install only. The debug override is opt-in — see
