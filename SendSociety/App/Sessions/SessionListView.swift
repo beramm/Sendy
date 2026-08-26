@@ -1,9 +1,11 @@
 import AVKit
 import PhotosUI
 import SwiftUI
+import UIKit
 
 struct SessionListView: View {
     @Environment(AppModel.self) private var model
+    @State private var sessionToEdit: ClimbSession?
 
     var body: some View {
         ZStack {
@@ -89,6 +91,13 @@ struct SessionListView: View {
         .foregroundStyle(.white)
         .navigationTitle("")
         .task { await model.refresh() }
+        .sheet(item: $sessionToEdit) { session in
+            SaveClimbSheet(
+                initialTitle: session.name,
+                initialGrade: session.grade,
+                sessionToEdit: session
+            )
+        }
     }
 
     /// List (not ScrollView+VStack) because swipeActions requires it.
@@ -137,8 +146,23 @@ struct SessionListView: View {
                     Button(role: .destructive) {
                         Task { await model.delete(session) }
                     } label: {
-                        Label("Delete", systemImage: "trash")
+                        Label {
+                            Text("Delete")
+                        } icon: {
+                            blackSwipeIcon("trash")
+                        }
                     }
+
+                    Button {
+                        sessionToEdit = session
+                    } label: {
+                        Label {
+                            Text("Edit")
+                        } icon: {
+                            blackSwipeIcon("pencil")
+                        }
+                    }
+                    .tint(AppTheme.accent)
                 }
             }
         }
@@ -148,6 +172,17 @@ struct SessionListView: View {
         .contentMargins(.top, 0, for: .scrollContent)
         .contentMargins(.bottom, 88, for: .scrollContent)
         .frame(minHeight: 260)
+    }
+
+    /// Native swipe actions recolor template symbols regardless of a SwiftUI
+    /// foreground style. Supplying an original-rendering image keeps the icon
+    /// pixels black while the action retains its own background and text color.
+    private func blackSwipeIcon(_ systemName: String) -> Image {
+        guard let symbol = UIImage(systemName: systemName) else {
+            return Image(systemName: systemName)
+        }
+        let blackSymbol = symbol.withTintColor(.black, renderingMode: .alwaysOriginal)
+        return Image(uiImage: blackSymbol)
     }
 
     private func sessionRow(_ session: ClimbSession) -> some View {

@@ -13,16 +13,22 @@ struct SaveClimbSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @FocusState private var titleIsFocused: Bool
+    private let sessionToEdit: ClimbSession?
 
-    init(initialTitle: String, initialGrade: ClimbGrade?) {
+    init(
+        initialTitle: String,
+        initialGrade: ClimbGrade?,
+        sessionToEdit: ClimbSession? = nil
+    ) {
         _title = State(initialValue: initialTitle)
         _selectedGrade = State(initialValue: initialGrade ?? .v4)
+        self.sessionToEdit = sessionToEdit
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text("Save")
+                Text(sessionToEdit == nil ? "Save" : "Edit")
                     .foregroundStyle(.white)
                 Text("Climb")
                     .foregroundStyle(AppTheme.accent)
@@ -143,7 +149,7 @@ struct SaveClimbSheet: View {
             Spacer(minLength: 18)
 
             PrimaryButton(
-                title: isSaving ? "SAVING…" : "SAVE",
+                title: primaryButtonTitle,
                 isEnabled: canSave,
                 disabledHint: "Enter a climb name."
             ) {
@@ -170,6 +176,11 @@ struct SaveClimbSheet: View {
 
     private var canSave: Bool {
         !isSaving && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var primaryButtonTitle: String {
+        if isSaving { return "SAVING…" }
+        return sessionToEdit == nil ? "SAVE" : "SAVE CHANGES"
     }
 
     private func gradeButton(_ grade: ClimbGrade) -> some View {
@@ -206,8 +217,19 @@ struct SaveClimbSheet: View {
         errorMessage = nil
         isSaving = true
         Task {
-            if await model.saveClimb(title: title, grade: selectedGrade) {
-                hasCompletedOnboarding = true
+            let didSave = if let sessionToEdit {
+                await model.updateSavedClimb(
+                    sessionToEdit,
+                    title: title,
+                    grade: selectedGrade
+                )
+            } else {
+                await model.saveClimb(title: title, grade: selectedGrade)
+            }
+            if didSave {
+                if sessionToEdit == nil {
+                    hasCompletedOnboarding = true
+                }
                 dismiss()
             } else {
                 errorMessage = model.lastError ?? "The climb could not be saved."

@@ -308,6 +308,52 @@ final class AppModel {
         await refresh()
     }
 
+    /// Updates list-facing metadata without reopening or reprocessing a saved
+    /// climb. `SessionStore.cachedProcessed` overlays this current session onto
+    /// the analytics cache when the climb is opened, so the edited name and
+    /// grade cannot be replaced by the older copy embedded in that cache.
+    func updateSavedClimb(
+        _ saved: ClimbSession,
+        title: String,
+        grade: ClimbGrade
+    ) async -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            lastError = "Enter a climb name before saving."
+            return false
+        }
+
+        var updated = saved
+        updated.name = trimmed
+        updated.nameSource = .user
+        updated.grade = grade
+
+        do {
+            try await store.save(updated)
+            if let coordinate = updated.coordinate {
+                await store.rememberPlacemark(
+                    name: SessionNamer.placeComponent(of: trimmed),
+                    at: coordinate,
+                    confirmedByUser: true
+                )
+            }
+            if session?.id == updated.id {
+                session = updated
+                sessionNameSource = .user
+                if var currentProcessed = processed {
+                    currentProcessed.session = updated
+                    processed = currentProcessed
+                }
+            }
+            lastError = nil
+            await refresh()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
     private func clearImportStates() {
         referenceImport = .idle
         attemptImport = .idle
