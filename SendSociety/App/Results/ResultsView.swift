@@ -186,7 +186,7 @@ struct ResultsView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .allowsHitTesting(displayMode == .sideBySide)
+                .disabled(displayMode != .sideBySide)
                 .accessibilityLabel("Skeleton comparison")
                 .accessibilityValue(skeletonIsActive ? "On" : "Off")
 
@@ -243,44 +243,56 @@ struct ResultsView: View {
     private func comparison(_ processed: ProcessedSession) -> some View {
         let frames = resolvedFrames(processed)
 
+        ResultsComparisonInteractionHost(
+            resetToken: "\(displayMode.rawValue)-\(position.sectionIndex)"
+        ) { zoomScale, panOffset, paneSize in
+            comparisonContent(
+                processed,
+                frames: frames,
+                zoomScale: zoomScale,
+                panOffset: panOffset,
+                paneSize: paneSize
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func comparisonContent(
+        _ processed: ProcessedSession,
+        frames: (reference: Int, attempt: Int?),
+        zoomScale: CGFloat,
+        panOffset: CGSize,
+        paneSize: CGSize
+    ) -> some View {
         switch displayMode {
         case .overlay:
-            GeometryReader { geometry in
-                SkeletonCanvas(
-                    referenceFrame: processed.referencePose.frame(at: frames.reference),
-                    attemptFrame: frames.attempt.flatMap { processed.attemptPose.frame(at: $0) },
-                    referenceMetrics: processed.referenceMetrics.frame(at: frames.reference),
-                    attemptMetrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
-                    referenceScale: processed.referenceScale,
-                    attemptScale: processed.attemptScale,
-                    // No route, and holds forced off whatever the toggles
-                    // say — the same call `SkeletonOverlayPane` makes, for the
-                    // same reason: the wall plate is in the picture already,
-                    // and numbered circles drawn over real holds are noise.
-                    route: nil,
-                    overlays: overlays.withoutHolds,
-                    // Overlay is spatial evidence, so retain each climber's tracked
-                    // size instead of normalizing both bodies to one torso length.
-                    normalizeBodyLength: false,
-                    // The card supplies the dark fallback around a missing wall
-                    // plate; do not paint the diagnostic canvas's gray fill.
-                    drawsBackground: false,
-                    wallPlate: processed.wallPlate?.image
+            SkeletonCanvas(
+                referenceFrame: processed.referencePose.frame(at: frames.reference),
+                attemptFrame: frames.attempt.flatMap { processed.attemptPose.frame(at: $0) },
+                referenceMetrics: processed.referenceMetrics.frame(at: frames.reference),
+                attemptMetrics: frames.attempt.flatMap { processed.attemptMetrics.frame(at: $0) },
+                referenceScale: processed.referenceScale,
+                attemptScale: processed.attemptScale,
+                route: nil,
+                overlays: overlays.withoutHolds,
+                normalizeBodyLength: false,
+                drawsBackground: false,
+                wallPlate: processed.wallPlate?.image
+            )
+            .frame(width: paneSize.width, height: paneSize.height)
+            .compositingGroup()
+            .scaleEffect(zoomScale)
+            .offset(panOffset)
+            .background(ResultsStyle.panelSurface)
+            .clipShape(.rect(cornerRadius: ResultsStyle.paneCornerRadius))
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: ResultsStyle.paneCornerRadius,
+                    style: .continuous
                 )
-                // Keep the wall image at exactly one Side by Side pane's size,
-                // then center that single comparison pane in the full row.
-                .frame(width: max(0, (geometry.size.width - 4) / 2), height: geometry.size.height)
-                .background(ResultsStyle.panelSurface)
-                .clipShape(.rect(cornerRadius: ResultsStyle.paneCornerRadius))
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: ResultsStyle.paneCornerRadius,
-                        style: .continuous
-                    )
-                    .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
         case .sideBySide:
             HStack(spacing: 4) {
@@ -298,7 +310,9 @@ struct ResultsView: View {
                         scrubbing: isScrubbing,
                         cache: frameCache,
                         badgeLabel: "REF",
-                        badgeColor: ResultsStyle.reference
+                        badgeColor: ResultsStyle.reference,
+                        zoomScale: zoomScale,
+                        panOffset: panOffset
                     )
                     SkeletonOverlayPane(
                         title: processed.attempt?.label.nonEmpty ?? "You",
@@ -314,7 +328,9 @@ struct ResultsView: View {
                         cache: frameCache,
                         badgeLabel: "YOU",
                         badgeColor: ResultsStyle.attempt,
-                        unavailableReason: "Not reached"
+                        unavailableReason: "Not reached",
+                        zoomScale: zoomScale,
+                        panOffset: panOffset
                     )
                 } else {
                     ComparisonVideoPane(
@@ -326,7 +342,9 @@ struct ResultsView: View {
                         cache: frameCache,
                         badgeLabel: "REF",
                         badgeColor: ResultsStyle.reference,
-                        showsPreviewArtwork: showsPreviewArtwork
+                        showsPreviewArtwork: showsPreviewArtwork,
+                        zoomScale: zoomScale,
+                        panOffset: panOffset
                     )
                     ComparisonVideoPane(
                         title: processed.attempt?.label.nonEmpty ?? "You",
@@ -338,7 +356,9 @@ struct ResultsView: View {
                         badgeLabel: "YOU",
                         badgeColor: ResultsStyle.attempt,
                         showsPreviewArtwork: showsPreviewArtwork,
-                        unavailableReason: "Not reached"
+                        unavailableReason: "Not reached",
+                        zoomScale: zoomScale,
+                        panOffset: panOffset
                     )
                 }
             }
@@ -810,6 +830,201 @@ struct ResultsView: View {
             return
         }
         showSaveClimb = true
+    }
+}
+
+/// Owns every high-frequency transform update so panning footage does not
+/// invalidate the Results header, sequence picker, playback, or insight cards.
+/// The transparent pan surface is confined to the comparison rectangle; mode
+/// and skeleton buttons live outside this view and therefore remain tappable.
+private struct ResultsComparisonInteractionHost<Content: View>: View {
+    private static var minimumZoom: CGFloat { 1 }
+    private static var maximumZoom: CGFloat { 4 }
+    private static var zoomStep: CGFloat { 0.5 }
+
+    let resetToken: String
+    @ViewBuilder let content: (CGFloat, CGSize, CGSize) -> Content
+
+    @State private var zoom: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var panStartOffset: CGSize?
+    @State private var zoomControlsVisible = false
+    @State private var hideZoomControlsTask: Task<Void, Never>?
+    @GestureState private var pinchZoom: CGFloat = 1
+
+    var body: some View {
+        GeometryReader { geometry in
+            let paneSize = CGSize(
+                width: max(0, (geometry.size.width - 4) / 2),
+                height: geometry.size.height
+            )
+
+            ZStack(alignment: .bottom) {
+                content(
+                    effectiveZoom,
+                    effectiveOffset(in: paneSize),
+                    paneSize
+                )
+                .contentShape(.rect)
+                .gesture(
+                    panGesture(in: paneSize),
+                    isEnabled: zoom > Self.minimumZoom
+                )
+                .zIndex(0)
+
+                if zoomControlsVisible {
+                    zoomControls(paneSize: paneSize)
+                        .padding(.bottom, 8)
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                        .zIndex(1)
+                }
+            }
+            .simultaneousGesture(zoomGesture(in: paneSize))
+        }
+        .onChange(of: resetToken) { _, _ in reset() }
+        .onDisappear { hideZoomControlsTask?.cancel() }
+    }
+
+    private var effectiveZoom: CGFloat {
+        (zoom * pinchZoom).clamped(to: Self.minimumZoom ... Self.maximumZoom)
+    }
+
+    private func zoomGesture(in paneSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .updating($pinchZoom) { magnification, state, _ in
+                state = magnification
+            }
+            .onChanged { _ in revealZoomControls() }
+            .onEnded { magnification in
+                zoom = (zoom * magnification).clamped(
+                    to: Self.minimumZoom ... Self.maximumZoom
+                )
+                offset = clampedOffset(offset, zoom: zoom, in: paneSize)
+                scheduleZoomControlsHide()
+            }
+    }
+
+    private func panGesture(in paneSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                let start = panStartOffset ?? offset
+                if panStartOffset == nil { panStartOffset = start }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    offset = rubberBandedOffset(
+                        CGSize(
+                            width: start.width + value.translation.width,
+                            height: start.height + value.translation.height
+                        ),
+                        zoom: zoom,
+                        in: paneSize
+                    )
+                }
+            }
+            .onEnded { _ in
+                defer { panStartOffset = nil }
+                let settled = clampedOffset(
+                    offset,
+                    zoom: zoom,
+                    in: paneSize
+                )
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                    offset = settled
+                }
+            }
+    }
+
+    private func zoomControls(paneSize: CGSize) -> some View {
+        HStack(spacing: 4) {
+            Button { changeZoom(by: -Self.zoomStep, in: paneSize) } label: {
+                Image(systemName: "minus.magnifyingglass")
+                    .frame(width: 38, height: 34)
+            }
+            .disabled(zoom <= Self.minimumZoom)
+            .accessibilityLabel("Zoom videos out")
+
+            Text(String(format: "%.1f×", Double(zoom)))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .frame(minWidth: 30)
+                .accessibilityLabel("Video zoom")
+                .accessibilityValue(String(format: "%.1f times", Double(zoom)))
+
+            Button { changeZoom(by: Self.zoomStep, in: paneSize) } label: {
+                Image(systemName: "plus.magnifyingglass")
+                    .frame(width: 38, height: 34)
+            }
+            .disabled(zoom >= Self.maximumZoom)
+            .accessibilityLabel("Zoom videos in")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 4)
+        .background(ResultsStyle.badgeSurface, in: .capsule)
+    }
+
+    private func changeZoom(by amount: CGFloat, in paneSize: CGSize) {
+        zoom = (zoom + amount).clamped(to: Self.minimumZoom ... Self.maximumZoom)
+        offset = clampedOffset(offset, zoom: zoom, in: paneSize)
+        scheduleZoomControlsHide()
+    }
+
+    private func effectiveOffset(in paneSize: CGSize) -> CGSize {
+        if panStartOffset != nil { return offset }
+        return clampedOffset(offset, zoom: effectiveZoom, in: paneSize)
+    }
+
+    private func clampedOffset(_ offset: CGSize, zoom: CGFloat, in paneSize: CGSize) -> CGSize {
+        ViewportTransformMath.clampedOffset(
+            offset,
+            zoom: zoom,
+            minimumZoom: Self.minimumZoom,
+            viewportSize: paneSize
+        )
+    }
+
+    /// Matches the elastic edge behaviour of a native scroll view. The video
+    /// can follow the finger slightly past its final bound instead of stopping
+    /// abruptly, then `onEnded` returns it to the exact valid edge.
+    private func rubberBandedOffset(
+        _ offset: CGSize,
+        zoom: CGFloat,
+        in paneSize: CGSize
+    ) -> CGSize {
+        ViewportTransformMath.rubberBandedOffset(
+            offset,
+            zoom: zoom,
+            minimumZoom: Self.minimumZoom,
+            viewportSize: paneSize
+        )
+    }
+
+    private func reset() {
+        hideZoomControlsTask?.cancel()
+        zoom = Self.minimumZoom
+        offset = .zero
+        panStartOffset = nil
+        zoomControlsVisible = false
+    }
+
+    private func revealZoomControls() {
+        hideZoomControlsTask?.cancel()
+        hideZoomControlsTask = nil
+        guard !zoomControlsVisible else { return }
+        withAnimation(.easeOut(duration: 0.16)) {
+            zoomControlsVisible = true
+        }
+    }
+
+    private func scheduleZoomControlsHide() {
+        hideZoomControlsTask?.cancel()
+        hideZoomControlsTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.25))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                zoomControlsVisible = false
+            }
+        }
     }
 }
 

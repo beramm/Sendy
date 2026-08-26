@@ -5,6 +5,7 @@ import SwiftUI
 struct SaveClimbSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(OnboardingStorage.completionKey) private var hasCompletedOnboarding = false
 
     @State private var title: String
     @State private var selectedGrade: ClimbGrade
@@ -206,6 +207,7 @@ struct SaveClimbSheet: View {
         isSaving = true
         Task {
             if await model.saveClimb(title: title, grade: selectedGrade) {
+                hasCompletedOnboarding = true
                 dismiss()
             } else {
                 errorMessage = model.lastError ?? "The climb could not be saved."

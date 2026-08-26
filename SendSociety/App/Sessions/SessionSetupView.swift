@@ -11,6 +11,7 @@ import SwiftUI
 
 struct SessionSetupView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(OnboardingStorage.completionKey) private var hasCompletedOnboarding = false
 
     @State private var playback: PlaybackItem?
     @State private var trimmingVideo: VideoRef?
@@ -83,6 +84,7 @@ struct SessionSetupView: View {
         .foregroundStyle(.white)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(!hasCompletedOnboarding)
         .task(id: model.session?.id) { editedName = model.session?.name ?? "" }
         .onChange(of: model.session?.name) { _, name in editedName = name ?? "" }
         .sheet(item: $playback) { item in

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum OnboardingConfiguration {
-    static let alwaysShowOnLaunch = true
+    static let alwaysShowOnLaunch = false
 }
 
 enum OnboardingStep: Int, CaseIterable {
@@ -13,13 +13,13 @@ enum OnboardingStep: Int, CaseIterable {
 }
 
 struct OnboardingFlowView: View {
-    let onFinished: () -> Void
+    let onFinished: @MainActor () async -> Bool
 
     @State private var step: OnboardingStep
     @State private var motion = OnboardingMotionController()
     @State private var isAdvancing = false
 
-    init(onFinished: @escaping () -> Void) {
+    init(onFinished: @escaping @MainActor () async -> Bool) {
         self.onFinished = onFinished
 #if DEBUG
         let requestedStep = ProcessInfo.processInfo.arguments
@@ -117,7 +117,11 @@ struct OnboardingFlowView: View {
         guard !isAdvancing else { return }
         isAdvancing = true
         guard let nextStep = OnboardingStep(rawValue: step.rawValue + 1) else {
-            onFinished()
+            Task { @MainActor in
+                if !(await onFinished()) {
+                    isAdvancing = false
+                }
+            }
             return
         }
 
