@@ -20,6 +20,23 @@ struct SendSocietyApp: App {
             RootView()
                 .environment(model)
                 .preferredColorScheme(.dark)
+                // Debug scaffolding, opt-in by launch argument only. Times the
+                // on-device model and exits, so a console launch is the whole
+                // harness. Never reached in an ordinary launch.
+                .task {
+                    if ModelLatencyBenchmark.isRequested {
+                        await ModelLatencyBenchmark.run()
+                        exit(0)
+                    }
+                    if ModelLatencyBenchmark.seedRequested {
+                        await SessionSeeding.run()
+                        exit(0)
+                    }
+                    if ModelLatencyBenchmark.verificationRequested {
+                        await NarrationVerification.run()
+                        exit(0)
+                    }
+                }
         }
     }
 }

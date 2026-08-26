@@ -520,10 +520,125 @@ struct SequenceAnalysisTests {
         )
 
         #expect(result.kind == .fall)
-        #expect(result.referenceFinding?.text == "Stayed on through this sequence")
-        #expect(result.attemptFinding?.text == "Fell during this sequence")
-        #expect(result.referenceFinding?.metricKind == nil)
-        #expect(result.attemptFinding?.metricKind == nil)
+        // The fall still outranks the technique difference — it is the
+        // observation on both cards. What changed is that the measured
+        // contrast now rides along as context, because "you fell here" on its
+        // own is the one thing the climber already knew.
+        #expect(result.referenceFinding?.observation == "Stayed on through this sequence")
+        #expect(result.attemptFinding?.observation == "Fell during this sequence")
+        #expect(result.referenceFinding?.cause == "Kept more weight off the arms")
+        #expect(result.attemptFinding?.cause == "Put more weight through the arms")
+        // `while`, never `because`. No measurement established that arm load
+        // is why this climber came off; the fall analyser found no mechanical
+        // signal here at all.
+        #expect(result.referenceFinding?.relationship == .whileContext)
+        #expect(result.attemptFinding?.relationship == .whileContext)
+        #expect(result.referenceFinding?.metricKind == .armLoadShare)
+        #expect(result.attemptFinding?.metricKind == .armLoadShare)
+    }
+
+    @Test("A mechanical fall signal reaches the card as a cause")
+    func mechanicalSignalBecomesTheCause() {
+        let move = delta(index: 0, metrics: [
+            MetricDelta(kind: .hipDistanceMean, reference: 0.18, attempt: 0.72, confidence: 1)
+        ])
+        let fall = FallReport(
+            occurred: true,
+            fallSectionIndex: 0,
+            confidence: 1,
+            mechanical: [FallSignal(
+                kind: .hipPeel,
+                status: .mechanical,
+                sectionIndex: 0,
+                frameIndex: 40,
+                detail: "Hips moved away from the wall through the seconds before release.",
+                value: 0.5
+            )],
+            proximateSectionIndex: 0
+        )
+        let result = SequenceAnalysisComposer().compose(
+            sequence: sequence(),
+            sectionDeltas: [move],
+            fallReport: fall,
+            fallAnalysis: SectionAnalysis(
+                sectionIndex: 0, headline: "You fell on this move.",
+                observations: [], drill: nil, source: "test"
+            )
+        )
+
+        // Mechanical means demonstrable from the geometry, so it earns
+        // `because` — the epistemic split rides on the relationship rather
+        // than on hedging words in the copy.
+        #expect(result.attemptFinding?.cause == "had been drifting away from the wall")
+        #expect(result.attemptFinding?.relationship == .because)
+        #expect(result.attemptFinding?.cardSentence(causeSubject: "you")
+            == "Came off here because you had been drifting away from the wall.")
+
+        // The reference side is about the metric the signal implicates, so
+        // both cards are about the same thing — and stays `while`, because
+        // nothing established that their hip position is why they stayed on.
+        #expect(result.referenceFinding?.metricKind == .hipDistanceMean)
+        #expect(result.referenceFinding?.relationship == .whileContext)
+    }
+
+    @Test("A fatigue proxy is context, never a cause")
+    func fatigueSignalStaysCorrelational() {
+        let move = delta(index: 0, metrics: [
+            MetricDelta(kind: .reachMargin, reference: 0.20, attempt: 0.75, confidence: 1)
+        ])
+        let fall = FallReport(
+            occurred: true,
+            fallSectionIndex: 0,
+            confidence: 1,
+            fatigue: [FallSignal(
+                kind: .reachMarginDecay,
+                status: .fatigueProxy,
+                sectionIndex: 0,
+                frameIndex: nil,
+                detail: "Latch extension grew across the climb.",
+                value: 0.3
+            )],
+            proximateSectionIndex: 0
+        )
+        let result = SequenceAnalysisComposer().compose(
+            sequence: sequence(),
+            sectionDeltas: [move],
+            fallReport: fall,
+            fallAnalysis: SectionAnalysis(
+                sectionIndex: 0, headline: "You fell on this move.",
+                observations: [], drill: nil, source: "test"
+            )
+        )
+
+        #expect(result.attemptFinding?.cause == "had been latching each hold from further out")
+        // The whole point: a correlational signal may be shown, and may not
+        // be called the reason.
+        #expect(result.attemptFinding?.relationship == .whileContext)
+    }
+
+    @Test("Every fall mechanism reads as a clause the climber is the subject of")
+    func fallMechanismsAreVerbPhrases() {
+        for kind in [
+            FallSignal.Kind.comOutsideBaseOfSupport, .barnDoor, .footSlip, .hipPeel,
+            .bentArmAccumulation, .armLoadAccumulation, .sectionDwellRatio,
+            .loadAsymmetryTrend, .reachMarginDecay
+        ] {
+            let mechanism = SequenceAnalysisComposer.fallMechanism(for: kind)
+            let finding = SequenceDifferenceFinding(
+                observation: "Came off here",
+                cause: mechanism,
+                metricKind: nil,
+                confidence: 1
+            )
+            // It lands after "because you", so it has to be a verb phrase and
+            // must not carry its own subject.
+            let sentence = finding.cardSentence(causeSubject: "you")
+            #expect(sentence.hasPrefix("Came off here because you "))
+            #expect(sentence.hasSuffix("."))
+            #expect(NumberGuard.numbers(in: mechanism).isEmpty)
+            #expect(SpeculationGuard.violations(in: mechanism).isEmpty)
+            #expect(NumberGuard.forbiddenUnitsPresent(in: mechanism).isEmpty)
+        }
     }
 
     @Test("An open-ended sequence never falls back to a false comparison")

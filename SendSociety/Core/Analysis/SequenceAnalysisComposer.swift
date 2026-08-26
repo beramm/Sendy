@@ -14,6 +14,14 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
     }
 
     public var observation: String
+    /// The card's whole text: three to five plain words, no subject, no full
+    /// stop, no figure. The REF/YOU badge already says whose it is, so the
+    /// phrase does not repeat it.
+    ///
+    /// Optional because analyses cached before this existed decode without one
+    /// — those fall back to `sentence(subject:causeSubject:)`, which is still
+    /// what the Differences sheet reads.
+    public var headline: String?
     /// A second measured factor is a cause only when `relationship` is
     /// `.because`. `.whileContext` keeps a second visible difference without
     /// pretending it explains the first. Standalone, structural, similar, and
@@ -28,6 +36,25 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
     public var text: String {
         guard let cause, !cause.isEmpty else { return observation }
         return "\(observation) \(relationship.rawValue) \(lowercasedFirst(cause))"
+    }
+
+    /// The card's whole text: **one sentence carrying the finding and its
+    /// cause**, with no subject in front of it.
+    ///
+    /// Between `headline` and `sentence(subject:causeSubject:)`. Three words
+    /// was tried on a phone at a wall and says nothing — "More direct" leaves
+    /// a climber asking *more direct than what, and how*. The full sentence
+    /// says it, but opens by repeating the badge directly above it.
+    ///
+    /// So: drop the leading subject, keep the one inside the cause clause,
+    /// which is what makes it read as English rather than a log line.
+    /// "Took a longer movement path because you used more foot placements."
+    public func cardSentence(causeSubject: String) -> String {
+        if !isAvailable {
+            return punctuated(text)
+        }
+        guard let cause, !cause.isEmpty else { return punctuated(observation) }
+        return punctuated("\(observation) \(relationship.rawValue) \(causeSubject) \(lowercasedFirst(cause))")
     }
 
     /// One presentation sentence for a specific card identity. Observation
@@ -45,6 +72,7 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
 
     public init(
         observation: String,
+        headline: String? = nil,
         cause: String? = nil,
         relationship: Relationship = .because,
         metricKind: MetricKind?,
@@ -52,6 +80,7 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
         unavailableReason: String? = nil
     ) {
         self.observation = observation
+        self.headline = headline
         self.cause = cause
         self.relationship = relationship
         self.metricKind = metricKind
@@ -62,6 +91,7 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         observation = try c.decode(String.self, forKey: .observation)
+        headline = try c.decodeIfPresent(String.self, forKey: .headline)
         cause = try c.decodeIfPresent(String.self, forKey: .cause)
         relationship = try c.decodeIfPresent(Relationship.self, forKey: .relationship) ?? .because
         metricKind = try c.decodeIfPresent(MetricKind.self, forKey: .metricKind)
@@ -72,6 +102,7 @@ public struct SequenceDifferenceFinding: Sendable, Codable, Hashable {
     public static func unavailable(_ reason: String) -> SequenceDifferenceFinding {
         SequenceDifferenceFinding(
             observation: "Insight unavailable",
+            headline: "Not comparable here",
             cause: reason,
             metricKind: nil,
             confidence: 0,
@@ -128,6 +159,17 @@ public struct SequenceAnalysis: Sendable, Codable, Hashable, Identifiable {
     /// encoded analyses remain decodable; new pipeline output supplies both.
     public var referenceFinding: SequenceDifferenceFinding?
     public var attemptFinding: SequenceDifferenceFinding?
+    /// The Differences sheet's prose, one paragraph per climber, describing
+    /// the same difference from two sides.
+    ///
+    /// Optional and leniently decoded so climbs saved before this iteration
+    /// still open — the sheet says plainly that there is no write-up rather
+    /// than showing an empty section. Written by the pipeline and cached with
+    /// the session; the view never generates one.
+    public var referenceNarrative: String?
+    public var attemptNarrative: String?
+    /// Which provider wrote the two paragraphs above, when one did.
+    public var narrationSource: String?
     /// Move indices whose measurements contributed to this result. This makes
     /// the sequence-level conclusion auditable without exposing all moves in
     /// the Results UI.
@@ -161,6 +203,19 @@ public struct SequenceAnalysis: Sendable, Codable, Hashable, Identifiable {
         self.sourceSectionIndices = sourceSectionIndices
         self.referenceFinding = referenceFinding
         self.attemptFinding = attemptFinding
+    }
+
+    /// Folds generated text into the analysis, replacing the deterministic
+    /// card phrases only when the generated ones survived their guards.
+    ///
+    /// The headline is the narrative's brief, not a second opinion on it, so
+    /// both land together or neither does.
+    public mutating func apply(_ narration: SequenceNarration) {
+        referenceFinding?.headline = narration.referenceHeadline
+        attemptFinding?.headline = narration.attemptHeadline
+        referenceNarrative = narration.referenceNarrative
+        attemptNarrative = narration.attemptNarrative
+        narrationSource = narration.source
     }
 
     /// Legacy comparative sentence for logs and non-card surfaces. The current
@@ -309,8 +364,8 @@ public struct SequenceAnalysisComposer: Sendable {
         }
 
         if let pair = causalMetricPair(in: aggregateDelta) {
-            let observation = differencePhrases(for: pair.outcome.kind)
-            let cause = differencePhrases(for: pair.cause.kind)
+            let observation = Self.differencePhrases(for: pair.outcome.kind)
+            let cause = Self.differencePhrases(for: pair.cause.kind)
             let attemptHigher = (pair.outcome.delta ?? 0) > 0
             let causeAttemptHigher = (pair.cause.delta ?? 0) > 0
             return SequenceAnalysis(
@@ -698,9 +753,11 @@ public struct SequenceAnalysisComposer: Sendable {
     ) -> DifferencePair {
         if result.kind == .fall {
             let fallIsHere = fallReport.fallSectionIndex.map(sequence.referenceMoves.contains) ?? false
-            return paired(
-                reference: "Stayed on through this sequence",
-                attempt: fallIsHere ? "Fell during this sequence" : "This is where the fall started"
+            return fallDifference(
+                sequence: sequence,
+                metrics: metrics,
+                report: fallReport,
+                fallIsHere: fallIsHere
             )
         }
 
@@ -709,19 +766,25 @@ public struct SequenceAnalysisComposer: Sendable {
                 || moveDeltas.contains(where: { !$0.attemptReached || $0.divergence?.kind == .truncated }) {
                 return paired(
                     reference: "Completed this sequence",
-                    attempt: "Did not complete this sequence"
+                    attempt: "Did not complete this sequence",
+                    referenceHeadline: "Finished this sequence",
+                    attemptHeadline: "Did not finish here"
                 )
             }
             if moveDeltas.contains(where: { $0.divergence?.kind == .differentHandOrder }) {
                 return paired(
                     reference: "Used the reference hold order",
-                    attempt: "Used a different hold order"
+                    attempt: "Used a different hold order",
+                    referenceHeadline: "Original hold order",
+                    attemptHeadline: "Different hold order"
                 )
             }
             if moveDeltas.contains(where: { $0.divergence != nil }) {
                 return paired(
                     reference: "Used the reference movement",
-                    attempt: "Used a different movement"
+                    attempt: "Used a different movement",
+                    referenceHeadline: "Original movement",
+                    attemptHeadline: "Different movement"
                 )
             }
             let reason = result.numbersUnavailableReason
@@ -763,8 +826,159 @@ public struct SequenceAnalysisComposer: Sendable {
 
         return paired(
             reference: "Matched the other climber closely across the measured body positions",
-            attempt: "Matched the reference closely across the measured body positions"
+            attempt: "Matched the reference closely across the measured body positions",
+            referenceHeadline: "Much the same here",
+            attemptHeadline: "Much the same here"
         )
+    }
+
+    /// The fall pair, carrying **what the analyser measured**, not only that
+    /// someone came off.
+    ///
+    /// "Fell during this sequence" is the one thing the climber already knows.
+    /// `FallAnalyzer` has more than that — a mechanism, and often a metric the
+    /// two climbers differ on across the same span — and none of it was
+    /// reaching the card.
+    ///
+    /// The epistemic split rides on `relationship`, which is the honest place
+    /// for it. A **mechanical** signal is demonstrable from the geometry, so
+    /// it earns `because`. A **fatigue** signal is correlational and gets
+    /// `while` — visible in the same span, not claimed as the cause. The
+    /// reference side is always `while`: nothing established that where their
+    /// hips were is *why* they stayed on.
+    private func fallDifference(
+        sequence: ClimbSequence,
+        metrics: [MetricDelta],
+        report: FallReport,
+        fallIsHere: Bool
+    ) -> DifferencePair {
+        func inThisSequence(_ signal: FallSignal) -> Bool {
+            sequence.referenceMoves.contains(signal.sectionIndex)
+        }
+        let mechanical = report.mechanical.first(where: inThisSequence)
+        let fatigue = report.fatigue.first(where: inThisSequence)
+        let signal = mechanical ?? fatigue
+        let relationship: SequenceDifferenceFinding.Relationship =
+            mechanical != nil ? .because : .whileContext
+
+        // Prefer the metric the signal implicates, so both cards are about
+        // the same measurement. Some mechanisms — a foot slipping, a barn
+        // door — mirror no single metric, and those fall back to whatever the
+        // two climbers most clearly differ on across this span.
+        let delta = SectionDelta(
+            sectionIndex: sequence.index,
+            sectionName: sequence.displayName,
+            deltas: metrics,
+            divergence: nil,
+            attemptReached: sequence.attemptReached,
+            alignmentCost: nil
+        )
+        let significant = delta.significantDeltas(threshold: config.deltaSignificanceThreshold)
+
+        // Direction matters more here than anywhere else on the screen.
+        // Picking the strongest contrast blind put "while they reached from
+        // farther away" on the REFERENCE card of a sequence the climber fell
+        // in — crediting the other climber with the worse habit, directly
+        // beside the fall. Read together the two cards looked like both
+        // climbers doing the same wrong thing.
+        //
+        // So: the mirror of the fall signal when the climber is on the worse
+        // side of it, otherwise the strongest difference they are on the
+        // worse side of, and otherwise nothing. A sequence where every
+        // measured difference favours the climber has no lesson to put next
+        // to their fall, and a bare card says that better than a confusing
+        // one does.
+        let mirrored = signal.flatMap { Self.mirrorMetric(for: $0.kind) }
+            .flatMap { kind in significant.first { $0.kind == kind && $0.attemptIsWorse == true } }
+        let contrast = mirrored ?? significant.first { $0.attemptIsWorse == true }
+
+        let mechanism = signal.map { Self.fallMechanism(for: $0.kind) }
+        let attemptObservation: String
+        if mechanism != nil {
+            attemptObservation = fallIsHere ? "Came off here" : "Ran into trouble here"
+        } else {
+            attemptObservation = fallIsHere ? "Fell during this sequence" : "Ran into trouble here"
+        }
+
+        // Past the last hold both climbers used there is nothing to compare,
+        // by construction — so the card says that rather than sitting there
+        // with one flat sentence and no explanation for why it is shorter
+        // than every other card on the screen.
+        let isOpenEnded = sequence.toAnchorID < 0
+        let referenceObservation = contrast == nil && isOpenEnded
+            ? "Stayed on past the last hold you both used"
+            : "Stayed on through this sequence"
+
+        return DifferencePair(
+            reference: SequenceDifferenceFinding(
+                observation: referenceObservation,
+                headline: "Stayed on here",
+                cause: contrast.flatMap(causePhrases)?.reference,
+                relationship: .whileContext,
+                metricKind: contrast?.kind,
+                confidence: contrast?.confidence ?? 1
+            ),
+            attempt: SequenceDifferenceFinding(
+                observation: attemptObservation,
+                headline: fallIsHere ? "Came off here" : "Trouble started here",
+                // The mechanism when there is one, the contrast otherwise.
+                // Never both: two clauses on one card is the prose the cards
+                // stopped carrying.
+                cause: mechanism ?? contrast.flatMap(causePhrases)?.attempt,
+                relationship: mechanism != nil ? relationship : .whileContext,
+                metricKind: contrast?.kind,
+                confidence: contrast?.confidence ?? 1
+            ),
+            metricKinds: contrast.map { [$0.kind] } ?? []
+        )
+    }
+
+    /// The measurement a fall signal implicates, where one exists.
+    ///
+    /// Used to choose which contrast the reference card shows, so both sides
+    /// of a fall are about the same thing. `nil` where the mechanism is not a
+    /// quantity this pipeline tracks — a foot leaving a hold is an event, not
+    /// a level.
+    static func mirrorMetric(for kind: FallSignal.Kind) -> MetricKind? {
+        switch kind {
+        case .comOutsideBaseOfSupport, .footSlip: nil
+        case .barnDoor, .loadAsymmetryTrend: .loadAsymmetry
+        case .hipPeel: .hipDistanceMean
+        case .bentArmAccumulation: .elbowFlexTime
+        case .armLoadAccumulation: .armLoadShare
+        case .sectionDwellRatio: .sectionDwellRatio
+        case .reachMarginDecay: .reachMargin
+        }
+    }
+
+    /// What the analyser saw, as a clause the climber can be the subject of.
+    ///
+    /// These land after "because you" or "while you", so every one is a verb
+    /// phrase. The wording states the movement and stops — whether it was
+    /// tiring, frightening or avoidable is not in the video, and the
+    /// mechanical/fatigue distinction is carried by the relationship rather
+    /// than by hedging words here.
+    static func fallMechanism(for kind: FallSignal.Kind) -> String {
+        switch kind {
+        case .comOutsideBaseOfSupport:
+            "had the weight outside the hands and feet"
+        case .barnDoor:
+            "swung out sideways around the holds"
+        case .footSlip:
+            "slipped a foot with the hands still loaded"
+        case .hipPeel:
+            "had been drifting away from the wall"
+        case .bentArmAccumulation:
+            "had been climbing on bending arms"
+        case .armLoadAccumulation:
+            "had been putting more and more weight on the arms"
+        case .sectionDwellRatio:
+            "had been taking longer on every move"
+        case .loadAsymmetryTrend:
+            "had been leaning harder on one side"
+        case .reachMarginDecay:
+            "had been latching each hold from further out"
+        }
     }
 
     private func metricDifference(
@@ -777,12 +991,14 @@ public struct SequenceAnalysisComposer: Sendable {
             return DifferencePair(reference: .unavailable(reason), attempt: .unavailable(reason))
         }
 
-        let phrases = differencePhrases(for: metric.kind)
+        let phrases = Self.differencePhrases(for: metric.kind)
+        let headlines = Self.headlinePhrases(for: metric.kind)
         let referenceIsHigher = referenceValue > attemptValue
         let causes = causeMetric.flatMap(causePhrases)
         return DifferencePair(
             reference: SequenceDifferenceFinding(
                 observation: referenceIsHigher ? phrases.higher : phrases.lower,
+                headline: referenceIsHigher ? headlines.higher : headlines.lower,
                 cause: causes.map { $0.reference },
                 relationship: relationship,
                 metricKind: metric.kind,
@@ -790,6 +1006,7 @@ public struct SequenceAnalysisComposer: Sendable {
             ),
             attempt: SequenceDifferenceFinding(
                 observation: referenceIsHigher ? phrases.lower : phrases.higher,
+                headline: referenceIsHigher ? headlines.lower : headlines.higher,
                 cause: causes.map { $0.attempt },
                 relationship: relationship,
                 metricKind: metric.kind,
@@ -802,18 +1019,22 @@ public struct SequenceAnalysisComposer: Sendable {
     private func paired(
         reference: String,
         attempt: String,
+        referenceHeadline: String,
+        attemptHeadline: String,
         referenceCause: String? = nil,
         attemptCause: String? = nil
     ) -> DifferencePair {
         DifferencePair(
             reference: SequenceDifferenceFinding(
                 observation: reference,
+                headline: referenceHeadline,
                 cause: referenceCause,
                 metricKind: nil,
                 confidence: 1
             ),
             attempt: SequenceDifferenceFinding(
                 observation: attempt,
+                headline: attemptHeadline,
                 cause: attemptCause,
                 metricKind: nil,
                 confidence: 1
@@ -827,13 +1048,96 @@ public struct SequenceAnalysisComposer: Sendable {
         guard let referenceValue = metric.reference, let attemptValue = metric.attempt else {
             return nil
         }
-        let phrases = differencePhrases(for: metric.kind)
+        let phrases = Self.differencePhrases(for: metric.kind)
         return referenceValue > attemptValue
             ? (phrases.higher, phrases.lower)
             : (phrases.lower, phrases.higher)
     }
 
-    private func differencePhrases(for kind: MetricKind) -> (higher: String, lower: String) {
+    /// The card phrase for each metric, one per direction.
+    ///
+    /// A different register from `differencePhrases`, deliberately. Those are
+    /// half-sentences a subject is prefixed onto and read at length in the
+    /// Differences sheet; these are what fits on a card next to a REF/YOU
+    /// badge. Three to five plain words, no subject, no unit, no metric name,
+    /// no gym slang — a climber a few months in reads it at a glance.
+    ///
+    /// Both directions are worded so a pair can never read identically when
+    /// the difference is one of degree: "More weight on arms" against "Less
+    /// weight on arms" says which way round it went without a figure.
+    static func headlinePhrases(for kind: MetricKind) -> (higher: String, lower: String) {
+        switch kind {
+        case .hipDistanceMean, .hipDistancePeak:
+            ("Hips away from wall", "Hips close to wall")
+        case .hipDistanceStart:
+            ("Started away from wall", "Started close to wall")
+        case .hipDistanceEnd:
+            ("Finished away from wall", "Finished close to wall")
+        case .armLoadShare, .armLoadPeak:
+            ("More weight on arms", "Less weight on arms")
+        case .unweightedFootTime:
+            ("Less weight on feet", "More weight on feet")
+        case .feetSetBeforeReach:
+            ("Feet set before reaching", "Reached before feet landed")
+        case .footCommitmentSeconds:
+            ("Slow to trust feet", "Quick to trust feet")
+        case .straightArmRatio:
+            ("Arms mostly straight", "Arms mostly bent")
+        case .comPathLength:
+            ("Longer way round", "Shorter way round")
+        case .comDisplacement:
+            ("Body moved further", "Body moved less")
+        case .comPathEfficiency:
+            ("More direct line", "Less direct line")
+        case .comPeakVelocity:
+            ("More dynamic here", "More static here")
+        case .loadAsymmetry:
+            ("Weight on one side", "Weight spread evenly")
+        case .footPlacementCount:
+            ("More foot shuffling", "Fewer foot moves")
+        case .hipTwist:
+            ("Hips turned more", "Hips turned less")
+        case .reachMargin:
+            ("Reached from far out", "Moved in before reaching")
+        case .sectionDwellRatio:
+            ("Slower through here", "Quicker through here")
+        case .pelvisTilt:
+            ("One hip dropped", "Hips level")
+        case .pelvisTiltStart:
+            ("Started with hip dropped", "Started with level hips")
+        case .pelvisTiltEnd:
+            ("Finished with hip dropped", "Finished with level hips")
+        case .pelvisTurn:
+            ("Hip turned to wall", "Square to the wall")
+        case .pelvisTurnStart:
+            ("Started hip turned in", "Started square to wall")
+        case .pelvisTurnEnd:
+            ("Finished hip turned in", "Finished square to wall")
+        case .torsoLean:
+            ("Leaning off to one side", "Body stayed centred")
+        case .torsoLeanStart:
+            ("Started leaning to one side", "Started centred")
+        case .torsoLeanEnd:
+            ("Finished leaning to one side", "Finished centred")
+        case .kneeDrive:
+            ("Knee turned in", "Knee stayed square")
+        case .pullingArmTime:
+            ("Pulling with arms longer", "Less pulling with arms")
+        case .latLoadTime:
+            ("Pulled in with back", "Less pull from back")
+        case .elbowFlexTime:
+            ("Arms bent and loaded", "Arms hanging straighter")
+        case .diagonalLoadBalance:
+            ("Weight through one diagonal", "Weight shared evenly")
+        }
+    }
+
+    /// Public and static because the narration layer needs the same wording.
+    /// A provider must never be handed a raw direction to interpret — given
+    /// "clearly less" it reads the words as a place on the wall — but a
+    /// finished phrase has its polarity already decided in Swift and nothing
+    /// left to get backwards.
+    public static func differencePhrases(for kind: MetricKind) -> (higher: String, lower: String) {
         switch kind {
         case .hipDistanceMean, .hipDistancePeak:
             ("Stayed farther from the wall", "Stayed closer to the wall")

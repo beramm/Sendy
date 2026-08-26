@@ -103,6 +103,88 @@ public enum MetricKind: String, Sendable, Codable, CaseIterable, Hashable {
         }
     }
 
+    /// One plain sentence saying what this measurement is, for a climber who
+    /// has never read a coaching article.
+    ///
+    /// `displayName` names the row; this says what the row is for. The
+    /// Differences sheet shows it beneath the figures, which is the only place
+    /// in the app that explains a metric rather than printing it — Detailed
+    /// Analytics is a reference table and assumes you already know.
+    ///
+    /// Deliberately free of figures and thresholds. It says what was counted,
+    /// not what a good value is: a number that is good on a slab is bad on a
+    /// steep wall, and this app measures no wall angle.
+    public var plainMeaning: String {
+        switch self {
+        case .hipDistanceMean:
+            "How far the hips sat off the wall through the whole span."
+        case .hipDistancePeak:
+            "The furthest the hips got from the wall at any single moment."
+        case .hipDistanceStart:
+            "How far the hips were off the wall as the span began."
+        case .hipDistanceEnd:
+            "How far the hips were off the wall at the end of the span."
+        case .armLoadShare:
+            "How much of the body weight the arms were holding rather than the feet."
+        case .armLoadPeak:
+            "The most weight the arms carried at any single moment."
+        case .unweightedFootTime:
+            "How much of the span the feet were on holds but carrying nothing."
+        case .feetSetBeforeReach:
+            "How often the feet were already placed before the hand went for the next hold."
+        case .footCommitmentSeconds:
+            "How long it took to put real weight on a foot after placing it."
+        case .straightArmRatio:
+            "How much of the span was spent hanging on straight arms rather than bent ones."
+        case .comPathLength:
+            "How far the body actually travelled to cross this span."
+        case .comDisplacement:
+            "How far the body ended up from where it started, in a straight line."
+        case .comPathEfficiency:
+            "How close the body's route was to a straight line from start to finish."
+        case .comPeakVelocity:
+            "The fastest the body moved at any point — high means a dynamic move."
+        case .loadAsymmetry:
+            "How unevenly the weight sat between the left and right sides."
+        case .footPlacementCount:
+            "How many times a foot was moved onto a hold across the span."
+        case .hipTwist:
+            "How far the hips turned away from square to the wall."
+        case .reachMargin:
+            "How stretched out the body was at the moment the next hold was caught."
+        case .sectionDwellRatio:
+            "How long this took, against the other climber's version of the same span."
+        case .pelvisTilt:
+            "How far one hip sat above the other rather than level."
+        case .pelvisTiltStart:
+            "How far one hip sat above the other as the span began."
+        case .pelvisTiltEnd:
+            "How far one hip sat above the other at the end of the span."
+        case .pelvisTurn:
+            "How far a hip was turned in towards the wall rather than square to it."
+        case .pelvisTurnStart:
+            "How far a hip was turned in towards the wall as the span began."
+        case .pelvisTurnEnd:
+            "How far a hip was turned in towards the wall at the end of the span."
+        case .torsoLean:
+            "How far the upper body hung off vertical."
+        case .torsoLeanStart:
+            "How far the upper body hung off vertical as the span began."
+        case .torsoLeanEnd:
+            "How far the upper body hung off vertical at the end of the span."
+        case .kneeDrive:
+            "How far the knee was driven across, past the foot it was standing on."
+        case .pullingArmTime:
+            "How much of the span was spent actively pulling — bent arm, loaded, back engaged."
+        case .latLoadTime:
+            "How much of the span the back and shoulders were levering the body in."
+        case .elbowFlexTime:
+            "How much of the span was spent on a bent arm with weight on it."
+        case .diagonalLoadBalance:
+            "How evenly the load was shared across the two opposing hand-and-foot diagonals."
+        }
+    }
+
     /// Whether a *lower* attempt value is generally the better technique. Used
     /// only to word a template sentence — never to score a climber.
     public var lowerIsBetter: Bool {
