@@ -8,6 +8,11 @@ enum AppNaming {
 }
 
 enum OnboardingStorage {
+    /// Set when the onboarding pages are finished. This is what decides
+    /// whether the pages run again, and nothing else.
+    static let pagesSeenKey = "hasSeenOnboarding"
+    /// Set when the first climb is saved. A later milestone than
+    /// `pagesSeenKey` — it gates first-run UI affordances, never the pages.
     static let completionKey = "hasCompletedOnboarding"
 }
 
@@ -43,16 +48,15 @@ struct SendSocietyApp: App {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    /// Set once, when the first climb is saved, and never cleared by the app.
+    /// Set once, when the onboarding pages are finished, and never cleared by
+    /// the app.
     ///
     /// `UserDefaults` lives in the app's container, so this survives relaunches
     /// and app updates and goes away only when the app is deleted — which is
-    /// exactly "show it on first install and never again".
-    @AppStorage(OnboardingStorage.completionKey) private var hasCompletedOnboarding = false
-    /// Finishing the pages opens a draft immediately, but onboarding is not
-    /// persisted as complete until that first climb is actually saved. This
-    /// keeps the pages dismissed while the draft is edited during this launch.
-    @State private var finishedOnboardingThisLaunch = false
+    /// exactly "show it on first install and never again". It is deliberately
+    /// *not* keyed off saving a first climb: abandoning the draft is normal,
+    /// and it must not replay the pages on the next launch.
+    @AppStorage(OnboardingStorage.pagesSeenKey) private var hasSeenOnboarding = false
     /// Cleared by `SplashView` once it has had its beat. Not persisted: the
     /// splash belongs to a cold start, and a relaunch is a cold start.
     @State private var showingSplash = true
@@ -65,7 +69,7 @@ struct RootView: View {
             } else if shouldShowOnboarding {
                 OnboardingFlowView {
                     guard await model.newSession(name: nil) else { return false }
-                    finishedOnboardingThisLaunch = true
+                    hasSeenOnboarding = true
                     return true
                 }
                 .transition(.opacity)
@@ -93,7 +97,6 @@ struct RootView: View {
     /// First install only. The debug override is opt-in — see
     /// `OnboardingConfiguration.alwaysShowOnLaunch`.
     private var shouldShowOnboarding: Bool {
-        guard !finishedOnboardingThisLaunch else { return false }
-        return OnboardingConfiguration.alwaysShowOnLaunch || !hasCompletedOnboarding
+        OnboardingConfiguration.alwaysShowOnLaunch || !hasSeenOnboarding
     }
 }

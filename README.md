@@ -5,15 +5,18 @@ climber's send and your own attempt — and tells you what you did differently.
 
 Film the reference climber with the phone on a tripod. Film your attempt from
 the same position. The app aligns the two clips in space and time, splits each
-climb into hold-to-hold moves, and produces a per-move breakdown of the
-differences in body position, load and timing.
+climb into hold-to-hold moves, and produces a breakdown of the differences in
+body position, load and timing — per sequence, between the holds you both
+touched.
 
 Everything runs on device. There is no backend, no API calls, and no account.
 
-> **Status: research harness, not a product.** The pipeline works end to end on
-> real footage. The UI is deliberately plain — system fonts, default controls —
-> because the point is to inspect what the pipeline produced, not to look good
-> doing it. Numbers on screen beat a nice layout.
+> **Status: MVP.** It started as a pipeline harness and is now an app — it
+> installs on a phone, onboards, records, processes, and hands back a readable
+> comparison, with a designed dark interface rather than a debug dump. The
+> pipeline is still where the hard problems are, and the tuning panel and
+> pipeline report are still in the build, but they are now developer surfaces
+> inside a product rather than the product itself.
 
 ## The rule that shapes everything
 
@@ -127,6 +130,60 @@ once. `compare` runs the real pipeline once per pose source and diffs everything
 through to the sentences a climber would read, which matters because degraded
 pose input does not produce degraded-*looking* output: it produces confidently
 different output with nothing on screen to indicate lower confidence.
+
+## The app
+
+Dark throughout, one accent (`#BCF700`) for the reference climber and a cyan for
+you, monospace reserved as a role for technical readouts rather than picked per
+screen. The palette lives in `AppTheme` — a hardcoded grey anywhere else is a
+bug, because the legend has to mean the same thing on every screen.
+
+The path through it:
+
+1. **Onboarding** — five animated pages on first install, then straight into a
+   draft, because a session with no clips has nothing else to offer.
+2. **Clips** — reference and attempt slots, each with its own state and its own
+   import; recorded in-app with a framing overlay, or picked from Photos.
+3. **Processing** — a per-stage progress readout, not a spinner.
+4. **Results** — the two climbs side by side or overlaid as skeletons, scrubbed
+   by sequence, with per-sequence differences and the numbers behind them in
+   sheets, and clip export through the system share sheet.
+5. **Save** — title and grade, kept in a session list that browses as a grid or
+   a list and supports multi-select delete.
+
+`TuningPanelView` and `PipelineReportView` remain reachable and stay plain on
+purpose: they exist to correct thresholds on a gym floor without a rebuild.
+
+First-run state is two separate `UserDefaults` keys, and conflating them is a
+bug that has been made once already:
+
+- `hasSeenOnboarding` — written when the pages are finished. This, and only
+  this, decides whether the pages run again. Keying it off a later milestone
+  meant that abandoning the first draft replayed onboarding on every launch.
+- `hasCompletedOnboarding` — written when the first climb is saved. Gates
+  first-run affordances, never the pages.
+
+### Debug launch arguments
+
+Opt-in by argument, never by a committed constant — a debug constant left in the
+on position is what made onboarding run on every launch on a real phone once
+before.
+
+```bash
+xcrun simctl launch <device> com.beramm.sendsociety --show-onboarding
+xcrun simctl launch <device> com.beramm.sendsociety --show-onboarding --onboarding-step=3
+```
+
+| Argument | Effect |
+|---|---|
+| `--show-onboarding` | Replay the onboarding pages regardless of stored state |
+| `--onboarding-step=N` | Start at page N, 0–4 (DEBUG builds only) |
+| `--measure-model` | Time the on-device model, print, exit |
+| `--seed-session` | Write a seeded session, exit |
+| `--verify-narration` | Run narration verification, exit |
+
+On a wired phone, substitute `xcrun devicectl device process launch --device
+<udid> com.beramm.sendsociety <args>`.
 
 ## Notes from real footage
 

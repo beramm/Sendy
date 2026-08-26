@@ -123,23 +123,12 @@ struct SessionListView: View {
                     // the gym once a located clip lands.
                     Task { await model.newSession(name: nil) }
                 } label: {
-                    // Centred, and with the gradient's radius equal to the
-                    // circle's. Anchored at `.leading` with twice the radius,
-                    // the pale stop fell outside the button entirely, so it
-                    // rendered as a flat green slab instead of a glow.
+                    // Flat accent, not the orb gradient.
                     Image(systemName: "plus")
                         .font(.system(size: 32, weight: .bold))
                         .foregroundStyle(AppTheme.background)
                         .frame(width: 64, height: 64)
-                        .background(
-                            RadialGradient(
-                                colors: [AppTheme.accentCore, AppTheme.accentEdge],
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: 32
-                            ),
-                            in: Circle()
-                        )
+                        .background(AppTheme.accentCore, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
